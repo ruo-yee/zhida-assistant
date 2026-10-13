@@ -29,7 +29,7 @@ import { MockWeChatBridge, type DraftEcho } from '../domain/wechat/MockWeChatBri
 import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
 import type { WeChatSession } from '../domain/wechat/WeChatBridge.ts'
 import { sleep } from '../lib/sleep.ts'
-import { loadSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
+import { SETTINGS_VERSION, loadSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
 
 export type Phase = 'loading' | 'ready' | 'empty' | 'error'
 export type EmptyReason = 'nomatch' | 'disabled'
@@ -273,6 +273,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       openaiBase,
       openaiModel,
       openaiKey,
+      settingsVersion: SETTINGS_VERSION,
     })
     document.documentElement.dataset.theme = theme
   }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
@@ -320,7 +321,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           customerText: latest,
           turns: recentChatTurns(active.messages),
           grounding,
-          hits: visibleHits,
+          hits: found,
         })
         await wait()
         if (token !== tokenRef.current) return
@@ -365,7 +366,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => {
       tokenRef.current += 1
     }
-  }, [lastCustomerId, sessionEpoch, persona, activePersonaId, enabledKey, modelMode, runPipeline])
+  }, [focusSession.id, lastCustomerId, sessionEpoch, persona, activePersonaId, enabledKey, modelMode, runPipeline])
 
   const insertToWeChat = useCallback(async () => {
     const text = draftRef.current.trim()

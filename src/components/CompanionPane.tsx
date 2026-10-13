@@ -1,5 +1,6 @@
 import { BookOpen, Lightbulb, Moon, MoreHorizontal, Settings, Sparkles, Sun } from 'lucide-react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
+import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
 import { formatChatType, formatResultCount, formatSessionChip } from '../domain/format.ts'
 import { ActionBar } from './ActionBar.tsx'
 import { DemoMenuItems } from './DemoMenu.tsx'
@@ -113,8 +114,8 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           回复建议
           {app.phase === 'ready' && app.variantCount > 0 ? (
             <span className="meta">
-              {app.provider === 'openai' ? '模型 · ' : ''}
-              {app.replyMode === 'chat' ? '人设草稿 · ' : '依据摘录 · '}
+              {app.provider === 'openai' ? `模型 · 最近 ${CHAT_CONTEXT_LIMIT} 条会话 · ` : '本地草稿 · '}
+              {app.replyMode === 'chat' ? '人设 · ' : '知识摘录 · '}
               {app.variantIndex + 1} / {app.variantCount}
             </span>
           ) : null}
@@ -124,7 +125,11 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           <div className="reply-wrap fade-in">
             {app.variants.length > 0 ? (
               <div className="candidates" role="radiogroup" aria-label="回复候选">
-                <p className="candidate-hint">按当前会话的最近消息起草。点一条候选，或在下面改完再插入。发送仍要再点一次。</p>
+                <p className="candidate-hint">
+                  {app.provider === 'openai'
+                    ? `三条回复由模型写成，上下文是当前会话最近 ${CHAT_CONTEXT_LIMIT} 条消息。点一条，或改完再插入。发送仍要再点一次。`
+                    : '当前是本地草稿。模型不可用或已关闭时才会这样。点一条，或改完再插入。发送仍要再点一次。'}
+                </p>
                 {app.variants.map((text, index) => (
                   <button
                     key={`${index}-${text.slice(0, 24)}`}

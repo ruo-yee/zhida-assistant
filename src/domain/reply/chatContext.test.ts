@@ -31,6 +31,8 @@ describe('chat context in the model prompt', () => {
     const [system, user] = buildModelMessages(input)
     expect(system?.content).toContain('上下文指当前微信会话')
     expect(system?.content).toContain('不是知识库')
+    expect(system?.content).toContain('客服助手')
+    expect(system?.content).toContain('语气专业、简明')
     const text = user?.content ?? ''
     const knowledgeAt = text.indexOf('知识摘录')
     const context = text.slice(0, knowledgeAt)
@@ -42,6 +44,16 @@ describe('chat context in the model prompt', () => {
     expect(knowledge.startsWith('知识摘录（可选补充）')).toBe(true)
     expect(knowledge).toContain('最小粒度是资源加操作')
     expect(knowledge).not.toContain('上下文')
+  })
+
+  it('still attaches knowledge hits for a chat turn when the search found some', () => {
+    const [system, user] = buildModelMessages({ ...input, grounding: 'chat', intent: '闲聊' })
+    expect(system?.content).toContain('人设：客服助手')
+    const text = user?.content ?? ''
+    const knowledgeAt = text.indexOf('知识摘录')
+    expect(text.slice(0, knowledgeAt)).toContain('我：断网时先记在本地，恢复后增量同步。')
+    expect(text.slice(knowledgeAt)).toContain('最小粒度是资源加操作')
+    expect(text.slice(knowledgeAt)).not.toContain('上下文')
   })
 
   it('keeps only the newest turns', () => {

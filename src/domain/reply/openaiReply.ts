@@ -18,19 +18,25 @@ export function chatTurnsForPrompt(input: Pick<ReplyInput, 'customerText' | 'tur
 
 /** Model messages. 上下文 is the current WeChat conversation; 知识摘录 is optional and is not 上下文. */
 export function buildModelMessages(input: ReplyInput) {
-  const grounded = input.grounding === 'grounded'
   const turns = chatTurnsForPrompt(input)
-  const system = grounded
-    ? '你是微信旁边的回复起草助手。上下文指当前微信会话里的最近消息，不是知识库。先读上下文，再按人设写出三条可直接发送的中文回复。知识摘录只作可选补充；摘录没有的数字、价格、时限和承诺不要写。三条之间用单独一行的 --- 分隔。不要标题，不要解释。'
-    : '你是微信旁边的回复起草助手。上下文指当前微信会话里的最近消息，不是知识库。先读上下文，再按人设写出三条短回复，每条一两到三句，可直接发送。没有知识摘录时不要编造产品事实、价格、额度或政策。三条之间用单独一行的 --- 分隔。不要标题，不要解释。'
+  const hasHits = input.hits.length > 0
+  const system = [
+    '你是微信旁边的回复起草助手。上下文指当前微信会话里的最近消息，不是知识库。',
+    `人设：${input.personaText}`,
+    `语气：${TONE_HINT[input.persona]}`,
+    input.grounding === 'grounded'
+      ? '先读上下文，再按人设和语气写出三条可直接发送的中文回复。知识摘录只作可选补充；摘录没有的数字、价格、时限和承诺不要写。'
+      : '先读上下文，再按人设和语气写出三条短回复，每条一两到三句，可直接发送。不要编造上下文和知识摘录里都没有的产品事实、价格、额度或政策。',
+    '三条之间用单独一行的 --- 分隔。不要标题，不要解释。',
+  ].join('\n')
   const user = [
     `人设：${input.personaText}`,
     `语气：${TONE_HINT[input.persona]}`,
     `意图：${input.intent}`,
     '上下文（当前微信会话的最近消息，不是知识库）：',
     formatChatContext(turns),
-    grounded ? '知识摘录（可选补充）：' : '知识摘录：没有。不要编造产品事实、价格、额度或政策。',
-    ...(grounded
+    hasHits ? '知识摘录（可选补充）：' : '知识摘录：没有。不要编造产品事实、价格、额度或政策。',
+    ...(hasHits
       ? input.hits.map(
           (hit, index) => `${index + 1}. ${hit.title} (${hit.version}) 相关度 ${hit.score.toFixed(2)}：${hit.excerpt}`,
         )
@@ -43,7 +49,8 @@ export function buildModelMessages(input: ReplyInput) {
 }
 
 export async function completeOpenAI(config: ModelConfig, input: ReplyInput): Promise<string[]> {
-  const base = (config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const base = config.baseUrl.trim().replace(/\/$/, '')
+  if (!base) throw new Error('no model endpoint')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 25000)
   const grounded = input.grounding === 'grounded'
