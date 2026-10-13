@@ -138,10 +138,46 @@ function isDockable(win: ListedWindow) {
   return win.layer === 0 && win.width >= MIN_DOCK_WINDOW && win.height >= MIN_DOCK_WINDOW
 }
 
+const EMOJI_MARKERS = ['表情', 'emoji', 'sticker', '贴纸', '颜文字']
+
+function emojiWindowTitle(title: string) {
+  const folded = title.trim().toLowerCase()
+  if (!folded) return false
+  return EMOJI_MARKERS.some((marker) => folded.includes(marker.toLowerCase()))
+}
+
+function auxiliaryWindowTitle(title: string) {
+  const text = title.trim().toLowerCase()
+  return text === '用 ai 处理' || text === '用ai处理' || text === '图片预览' || text === 'preview'
+}
+
 /**
- * Pick WeChat's largest on-screen layer-0 window.
- * Identity comes from the bundle PID (NSWorkspace), then the owner name.
+ * Main chat window. Emoji pickers and media chrome are never chosen.
+ * A window much smaller than the largest is a popover.
+ * Same rules as the reference `choose_chat_window`.
+ */
+export function chooseChatWindow(windows: ListedWindow[]): ListedWindow | null {
+  const parsed = windows.filter((win) => win.width >= 80 && win.height >= 80)
+  const pool = parsed.filter((win) => !emojiWindowTitle(win.title) && !auxiliaryWindowTitle(win.title))
+  if (pool.length === 0) return null
+  const largest = Math.max(...pool.map((win) => win.width * win.height))
+  const tallest = Math.max(...pool.map((win) => win.height))
+  let main = pool.filter((win) => {
+    const area = win.width * win.height
+    if (area < largest * 0.72) return false
+    if (win.height + 120 < tallest && area < largest * 0.9) return false
+    return true
+  })
+  if (main.length === 0) main = pool
+  main.sort((a, b) => b.width * b.height - a.width * a.height || b.id - a.id)
+  return main[0] ?? null
+}
+
+/**
+ * Pick the on-screen main chat window.
+ * Identity comes from the bundle PID, then the owner name.
  * A blank title — common without Screen Recording — still matches.
+ * Accessibility frames are not a dock source.
  */
 export function selectWeChatWindow(snapshot: WeChatWindowSnapshot): FindOutcome {
   if (snapshot.error && snapshot.pids.length === 0 && snapshot.windows.length === 0) {
@@ -149,33 +185,16 @@ export function selectWeChatWindow(snapshot: WeChatWindowSnapshot): FindOutcome 
   }
   const pids = new Set(snapshot.pids)
   const owners = new Set<string>(WECHAT_OWNER_NAMES)
-  const candidates = snapshot.windows.filter((win) => isDockable(win) && isWeChatWindow(win, pids, owners))
-  candidates.sort((a, b) => b.width * b.height - a.width * a.height || b.id - a.id)
-  const best = candidates[0]
-  if (best) {
+  const wechat = snapshot.windows.filter((win) => win.layer === 0 && isWeChatWindow(win, pids, owners))
+  const chosen = chooseChatWindow(wechat)
+  if (chosen && isDockable(chosen)) {
     return {
       bounds: electronBoundsFromQuartz({
-        x: best.x,
-        y: best.y,
-        width: best.width,
-        height: best.height,
-        title: best.title || best.owner || snapshot.names[0] || '微信',
-      }),
-      reason: 'ok',
-    }
-  }
-  if (
-    snapshot.axBounds &&
-    snapshot.axBounds.width >= MIN_DOCK_WINDOW &&
-    snapshot.axBounds.height >= MIN_DOCK_WINDOW
-  ) {
-    return {
-      bounds: electronBoundsFromQuartz({
-        x: snapshot.axBounds.x,
-        y: snapshot.axBounds.y,
-        width: snapshot.axBounds.width,
-        height: snapshot.axBounds.height,
-        title: snapshot.names[0] || '微信',
+        x: chosen.x,
+        y: chosen.y,
+        width: chosen.width,
+        height: chosen.height,
+        title: chosen.title || chosen.owner || snapshot.names[0] || '微信',
       }),
       reason: 'ok',
     }
@@ -206,10 +225,10 @@ function hasOnScreenWeChat(snapshot: WeChatWindowSnapshot) {
 }
 
 /**
- * On-screen CoreGraphics bounds dock immediately, including when the session
- * title is still being read. Concealed (Cmd+H, off-screen-only, or minimized)
- * hides the companion and must not be replaced by a stale Accessibility frame.
- * A CoreGraphics miss is left for System Events.
+ * An on-screen chat window docks immediately. Cmd+H hides even if a stale
+ * frame is still attached. A CoreGraphics miss (empty list, or only this
+ * app) is left for System Events. Other apps on screen and no WeChat
+ * window means minimized or hidden.
  */
 export function listedWindowOutcome(snapshot: WeChatWindowSnapshot): FindOutcome {
   const picked = selectWeChatWindow(snapshot)

@@ -111,7 +111,7 @@ describe('selectWeChatWindow', () => {
     expect(found.needsAccessibility).toBe(true)
   })
 
-  it('uses Accessibility bounds when the window list missed WeChat', () => {
+  it('does not dock a stale Accessibility frame when other apps are on screen', () => {
     const found = selectWeChatWindow(
       snapshot({
         pids: [10],
@@ -120,10 +120,36 @@ describe('selectWeChatWindow', () => {
         windows: [win({ pid: 3, width: 500, height: 400, owner: 'Safari' })],
       }),
     )
-    expect(found).toEqual({
-      bounds: { x: 40, y: 60, width: 880, height: 640, title: '微信' },
-      reason: 'ok',
-    })
+    expect(found.reason).toBe('hidden')
+    expect(found.bounds).toBeNull()
+  })
+
+  it('docks to the chat and ignores a larger emoji picker', () => {
+    const found = selectWeChatWindow(
+      snapshot({
+        pids: [10],
+        windows: [
+          win({ pid: 10, width: 1400, height: 900, title: '表情与贴纸', id: 2 }),
+          win({ pid: 10, x: 12, y: 40, width: 915, height: 693, title: '迈腾7连-3班 (322)', id: 1 }),
+        ],
+      }),
+    )
+    expect(found.reason).toBe('ok')
+    expect(found.bounds).toMatchObject({ x: 12, y: 40, width: 915, height: 693, title: '迈腾7连-3班 (322)' })
+  })
+
+  it('ignores a media preview and a small popover', () => {
+    const found = selectWeChatWindow(
+      snapshot({
+        pids: [10],
+        windows: [
+          win({ pid: 10, width: 1600, height: 1000, title: '图片预览', id: 3 }),
+          win({ pid: 10, width: 280, height: 320, title: '', id: 2 }),
+          win({ pid: 10, x: 8, y: 20, width: 900, height: 700, title: '微信', id: 1 }),
+        ],
+      }),
+    )
+    expect(found.bounds).toMatchObject({ x: 8, y: 20, width: 900, height: 700 })
   })
 
   it('reports a hidden main window when other apps are visible', () => {
@@ -192,7 +218,7 @@ describe('listedWindowOutcome', () => {
     ).toBe('hidden')
   })
 
-  it('still docks from Accessibility when CoreGraphics missed a visible window', () => {
+  it('leaves a CoreGraphics miss for System Events instead of using an Accessibility frame', () => {
     const found = listedWindowOutcome(
       snapshot({
         pids: [10],
@@ -200,8 +226,8 @@ describe('listedWindowOutcome', () => {
         axBounds: { x: 40, y: 60, width: 880, height: 640 },
       }),
     )
-    expect(found.reason).toBe('ok')
-    expect(found.bounds?.width).toBe(880)
+    expect(found.reason).toBe('screen-recording')
+    expect(found.bounds).toBeNull()
   })
 })
 
@@ -209,13 +235,12 @@ describe('darwinWeChatWindowScript', () => {
   it('looks up the WeChat bundle and does not prompt on the poll', () => {
     const script = darwinWeChatWindowScript()
     expect(script).toContain('com.tencent.xinWeChat')
-    expect(script).toContain('AXIsProcessTrusted')
+    expect(script).toContain('kCGWindowListOptionOnScreenOnly')
     expect(script).toContain('appHidden')
     expect(script).toContain('function isAppHidden')
-    expect(script).toContain('concealed')
-    expect(script).toContain('function axWindowsMinimized')
-    expect(script).toContain('AXMinimizedWindow')
-    expect(script).toContain('readWindowList(false)')
+    expect(script).not.toContain('AXUIElement')
+    expect(script).not.toContain('axWindowsMinimized')
+    expect(script).not.toContain('readWindowList(false)')
     expect(script).not.toContain('AXTrustedCheckOptionPrompt')
   })
 })

@@ -11,6 +11,7 @@ import type { FindOutcome } from '../src/dock/types.ts'
 import { electronAccessibilityTrusted } from './accessibility.ts'
 import { DARWIN_APPLESCRIPT, WIN32_POWERSHELL } from './hostScripts.ts'
 import { runCommand } from './runCommand.ts'
+import { readOnScreenSnapshot } from './wechat/macNative.ts'
 import { wechatProcessAlive } from './wechat/processAlive.ts'
 
 export async function findWeChatWindow(platform = process.platform): Promise<FindOutcome> {
@@ -21,34 +22,34 @@ export async function findWeChatWindow(platform = process.platform): Promise<Fin
 }
 
 async function findDarwin(): Promise<FindOutcome> {
-  const listed = await runCommand(
-    'osascript',
-    [
-      '-l',
-      'JavaScript',
-      '-e',
-      darwinWeChatWindowScript(),
-      '--',
-      String(process.pid),
-      electronAccessibilityTrusted() ? '1' : '0',
-    ],
-    4000,
-  )
-  const snapshot = parseWeChatSnapshot(listed.stdout)
+  // Reference dock: on-screen CGWindowList in this process, never Accessibility.
+  // osascript is only the fallback when that list is blind (a different TCC client).
   let fromList: FindOutcome | null = null
-  if (snapshot) {
-    const picked = listedWindowOutcome(snapshot)
-    // On-screen bounds dock immediately. Minimized, Cmd+H, or off-screen
-    // WeChat is hidden here, before a stale System Events frame can dock.
-    if (picked.bounds) return picked
-    if (picked.reason === 'hidden') return picked
+  let listedStderr = ''
+  const native = readOnScreenSnapshot(process.pid)
+  if (native) {
+    const picked = listedWindowOutcome(native)
+    if (picked.bounds || picked.reason === 'hidden' || picked.reason === 'not-running') return picked
     fromList = picked
+  } else {
+    const listed = await runCommand(
+      'osascript',
+      ['-l', 'JavaScript', '-e', darwinWeChatWindowScript(), '--', String(process.pid), '0'],
+      4000,
+    )
+    listedStderr = listed.stderr
+    const snapshot = parseWeChatSnapshot(listed.stdout)
+    if (snapshot) {
+      const picked = listedWindowOutcome(snapshot)
+      if (picked.bounds || picked.reason === 'hidden') return picked
+      fromList = picked
+    }
   }
 
   const hostTrusted = electronAccessibilityTrusted()
   const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 4000)
   const presence = parseWeChatPresence(`${ax.stdout}\n${ax.stderr}`)
-  const blob = `${listed.stderr}\n${ax.stderr}`
+  const blob = `${listedStderr}\n${ax.stderr}`
   return resolveWeChatVisibility({
     fromList,
     presence,

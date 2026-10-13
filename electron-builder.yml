@@ -12,6 +12,11 @@ files:
   - dist-electron/**/*
   - package.json
   - "!node_modules/**"
+  - node_modules/koffi/**/*
+  - node_modules/@koromix/koffi-darwin-*/**/*
+asarUnpack:
+  - node_modules/koffi/**/*
+  - node_modules/@koromix/koffi-darwin-*/**/*
 artifactName: zhida-assistant-${version}-${os}-${arch}.${ext}
 # packaging/build_mac.sh sets CSC_NAME. null skips signing (Identifier stays Electron).
 # "-" is a new ad-hoc hash every build, so isTrustedAccessibilityClient stays false.

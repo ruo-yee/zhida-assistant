@@ -1,9 +1,9 @@
 import { WECHAT_BUNDLE_IDS, WECHAT_OWNER_NAMES } from './wechatWindow.ts'
 
 /**
- * One osascript pass: NSWorkspace bundle id → PID, then on-screen CGWindowList.
- * Accessibility is only probed when that list has no dockable WeChat window,
- * and it never passes AXTrustedCheckOptionPrompt (the poll must not raise a dialog).
+ * On-screen windows only, same as the reference `_wechat_window_infos`.
+ * No Accessibility calls: those belong to the title read, and running them
+ * from osascript on this tick made WeChat stall past the dock timeout.
  */
 export function darwinWeChatWindowScript() {
   const bundles = JSON.stringify(WECHAT_BUNDLE_IDS)
@@ -72,25 +72,15 @@ export function darwinWeChatWindowScript() {
   }
   var appHidden = mainStates.length > 0 && mainStates.indexOf(0) < 0;
   var windows = [];
-  var onScreenCount = 0;
-  var anywhereCount = 0;
   try {
-    windows = readWindowList(true);
-    onScreenCount = countWeChatWindows(windows, pids, nameSet);
-    anywhereCount = countWeChatWindows(readWindowList(false), pids, nameSet);
+    windows = readWindowList();
   } catch (error) {
     return fail('window-list-failed');
   }
-  var cgBlind = onScreenCount === 0 && anywhereCount === 0;
-  var offscreen = !cgBlind && onScreenCount === 0 && anywhereCount > 0;
-  var axMinimized = !appHidden && onScreenCount === 0 ? axWindowsMinimized(pids) : false;
-  var concealed = appHidden || offscreen || axMinimized;
-  var hostTrusted = String(argv[1] || '') === '1';
-  var ax = hasDockable(pids, nameSet, windows) ? { trusted: null, bounds: null } : probeAx(pids, hostTrusted);
-  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: ax.trusted, axBounds: ax.bounds, appHidden: appHidden, concealed: concealed });
+  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: null, axBounds: null, appHidden: appHidden, concealed: false });
 }
-function readWindowList(onScreenOnly) {
-  var opts = onScreenOnly ? ($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements) : 0;
+function readWindowList() {
+  var opts = $.kCGWindowListOptionOnScreenOnly;
   var raw = $.CGWindowListCopyWindowInfo(opts, $.kCGNullWindowID);
   var list = [];
   try { list = asArray(ObjC.deepUnwrap(raw)); } catch (error) { list = asArray(raw); }
@@ -114,17 +104,6 @@ function readWindowList(onScreenOnly) {
   }
   return windows;
 }
-function countWeChatWindows(windows, pids, nameSet) {
-  var set = {};
-  for (var i = 0; i < pids.length; i++) set[pids[i]] = 1;
-  var count = 0;
-  for (var n = 0; n < windows.length; n++) {
-    var win = windows[n];
-    if (Number(win.layer) !== 0 || Number(win.width) < 240 || Number(win.height) < 240) continue;
-    if (set[win.pid] || nameSet[win.owner]) count += 1;
-  }
-  return count;
-}
 function isAppHidden(app) {
   try {
     var flag = false;
@@ -136,106 +115,6 @@ function isAppHidden(app) {
   } catch (error) {
     return false;
   }
-}
-function axWindowsMinimized(pids) {
-  try { ObjC.import('ApplicationServices'); } catch (error) { return false; }
-  var saw = false;
-  var visible = false;
-  for (var i = 0; i < pids.length; i++) {
-    try {
-      var root = $.AXUIElementCreateApplication(pids[i]);
-      $.AXUIElementSetMessagingTimeout(root, 0.25);
-      try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), $.NSNumber.numberWithBool(true)); } catch (error) {}
-      var nodes = [];
-      var mainWin = copyAttr(root, 'AXMainWindow');
-      var focused = copyAttr(root, 'AXFocusedWindow');
-      if (mainWin) nodes.push(mainWin);
-      if (focused) nodes.push(focused);
-      var raw = copyAttr(root, 'AXWindows');
-      if (raw && typeof raw.count === 'number') {
-        var limit = Math.min(raw.count, 6);
-        for (var n = 0; n < limit; n++) nodes.push(raw.objectAtIndex(n));
-      }
-      for (var k = 0; k < nodes.length; k++) {
-        saw = true;
-        if (!axMinimized(nodes[k])) visible = true;
-      }
-    } catch (error) {}
-  }
-  return saw && !visible;
-}
-function axMinimized(el) {
-  var mini = copyAttr(el, 'AXMinimized');
-  try { mini = ObjC.unwrap(mini); } catch (error) {}
-  if (mini === true || mini === 1 || mini === '1' || mini === 'true') return true;
-  var sub = '';
-  try { sub = String(ObjC.unwrap(copyAttr(el, 'AXSubrole')) || ''); } catch (error) { sub = ''; }
-  return sub === 'AXMinimizedWindow';
-}
-function hasDockable(pids, nameSet, windows) {
-  var set = {};
-  for (var i = 0; i < pids.length; i++) set[pids[i]] = 1;
-  for (var n = 0; n < windows.length; n++) {
-    var win = windows[n];
-    if (Number(win.layer) !== 0 || Number(win.width) < 240 || Number(win.height) < 240) continue;
-    if (set[win.pid] || nameSet[win.owner]) return true;
-  }
-  return false;
-}
-function probeAx(pids, hostTrusted) {
-  if (!pids.length) return { trusted: hostTrusted ? true : null, bounds: null };
-  var trusted = hostTrusted ? true : false;
-  if (!trusted) {
-    try { ObjC.import('ApplicationServices'); } catch (error) { return { trusted: false, bounds: null }; }
-    try { trusted = $.AXIsProcessTrusted() ? true : false; } catch (error) { trusted = false; }
-  } else {
-    try { ObjC.import('ApplicationServices'); } catch (error) { return { trusted: true, bounds: null }; }
-  }
-  if (!trusted) return { trusted: false, bounds: null };
-  var best = null;
-  for (var i = 0; i < pids.length; i++) {
-    try {
-      var root = $.AXUIElementCreateApplication(pids[i]);
-      $.AXUIElementSetMessagingTimeout(root, 0.35);
-      var raw = copyAttr(root, 'AXWindows');
-      if (!raw || typeof raw.count !== 'number') continue;
-      var limit = Math.min(raw.count, 8);
-      for (var n = 0; n < limit; n++) {
-        var win = raw.objectAtIndex(n);
-        var pos = readPoint(win);
-        var size = readSize(win);
-        if (!pos || !size || size.w < 240 || size.h < 240) continue;
-        if (axMinimized(win)) continue;
-        var area = size.w * size.h;
-        if (!best || area > best.area) best = { x: pos.x, y: pos.y, width: size.w, height: size.h, area: area };
-      }
-    } catch (error) {}
-  }
-  if (!best) return { trusted: true, bounds: null };
-  return { trusted: true, bounds: { x: best.x, y: best.y, width: best.width, height: best.height } };
-}
-function copyAttr(el, name) {
-  if (!el) return null;
-  var slot = Ref();
-  var err = $.AXUIElementCopyAttributeValue(el, $(name), slot);
-  if (err !== 0) return null;
-  return slot[0];
-}
-function readPoint(el) {
-  var raw = copyAttr(el, 'AXPosition');
-  if (!raw) return null;
-  var slot = Ref();
-  if (!$.AXValueGetValue(raw, $.kAXValueCGPointType, slot)) return null;
-  var point = slot[0];
-  return { x: Number(point.x || 0), y: Number(point.y || 0) };
-}
-function readSize(el) {
-  var raw = copyAttr(el, 'AXSize');
-  if (!raw) return null;
-  var slot = Ref();
-  if (!$.AXValueGetValue(raw, $.kAXValueCGSizeType, slot)) return null;
-  var size = slot[0];
-  return { w: Number(size.width || size.x || 0), h: Number(size.height || size.y || 0) };
 }
 `
 }
