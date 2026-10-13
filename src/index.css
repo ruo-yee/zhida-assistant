@@ -718,7 +718,56 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
 .switch.is-on { background: var(--brand); }
 .switch.is-on::after { transform: translateX(14px); }
 .field { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.field span { font-size: 12px; color: var(--muted); }
+.field span, .field label { font-size: 12px; color: var(--muted); }
+.field label { font-weight: 650; color: var(--text); }
+.field-note { line-height: 1.45; }
+.field-secret { position: relative; }
+.field-secret input { padding-right: 52px; }
+.field-reveal {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--brand-deep);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 4px 8px;
+}
+.settings-page { padding: 16px 16px 8px; }
+.settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.settings-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.settings-head p { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 14px 0 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--header);
+}
+.settings-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  padding: 8px 4px;
+}
+.settings-tabs button.is-on { background: var(--card); color: var(--text); }
+.settings-status {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--header);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.linkish.is-inline { margin: 0 0 8px; }
 .hint { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .body-para { margin: 0 0 12px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; color: var(--text-secondary); }

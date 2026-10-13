@@ -1,6 +1,5 @@
 import { CompanionProvider, useCompanion } from './app/CompanionProvider.tsx'
 import { CompanionPane } from './components/CompanionPane.tsx'
-import { SettingsDialog } from './components/SettingsDialog.tsx'
 import { SourceDialog } from './components/SourceDialog.tsx'
 import { WeChatPane } from './components/WeChatPane.tsx'
 import { TooltipProvider } from './components/ui/tooltip.tsx'
@@ -45,7 +44,6 @@ function Shell() {
         <WeChatPane hidden={app.narrow && app.mobilePane !== 'wechat'} />
         <CompanionPane hidden={app.narrow && app.mobilePane !== 'companion'} />
       </div>
-      <SettingsDialog />
       <SourceDialog />
       {app.toast ? (
         <div className="toast" role="status">

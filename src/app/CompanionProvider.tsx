@@ -30,6 +30,7 @@ import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
 import type { WeChatSession } from '../domain/wechat/WeChatBridge.ts'
 import { sleep } from '../lib/sleep.ts'
 import { SETTINGS_VERSION, loadSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
+import type { SettingsSection } from './settingsSections.ts'
 
 export type Phase = 'loading' | 'ready' | 'empty' | 'error'
 export type EmptyReason = 'nomatch' | 'disabled'
@@ -61,7 +62,9 @@ interface CompanionContextValue {
   provider: 'mock' | 'openai'
   emptyReason: EmptyReason
   settingsOpen: boolean
+  settingsSection: SettingsSection
   setSettingsOpen: (open: boolean) => void
+  openSettings: (section?: SettingsSection) => void
   sourceHit: KnowledgeHit | null
   openSource: (id: string) => void
   closeSource: () => void
@@ -143,7 +146,16 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState<'mock' | 'openai'>('mock')
   const [replyMode, setReplyMode] = useState<ReplyGrounding>('grounded')
   const [emptyReason, setEmptyReason] = useState<EmptyReason>('nomatch')
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpenState] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('model')
+  const setSettingsOpen = useCallback((open: boolean) => {
+    if (open) setSettingsSection('model')
+    setSettingsOpenState(open)
+  }, [])
+  const openSettings = useCallback((section: SettingsSection = 'model') => {
+    setSettingsSection(section)
+    setSettingsOpenState(true)
+  }, [])
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [theme, setTheme] = useState(boot.theme)
@@ -490,7 +502,9 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     provider,
     emptyReason,
     settingsOpen,
+    settingsSection,
     setSettingsOpen,
+    openSettings,
     sourceHit: hits.find((hit) => hit.id === sourceId) ?? null,
     openSource: (id) => setSourceId(id),
     closeSource: () => setSourceId(null),

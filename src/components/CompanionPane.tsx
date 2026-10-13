@@ -3,6 +3,7 @@ import { useCompanion } from '../app/CompanionProvider.tsx'
 import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
 import { formatChatType, formatResultCount, formatSessionChip } from '../domain/format.ts'
 import { ActionBar } from './ActionBar.tsx'
+import { SettingsPage } from './SettingsPage.tsx'
 import { DemoMenuItems } from './DemoMenu.tsx'
 import { DockStatusBar } from './DockStatusBar.tsx'
 import { KnowledgeCard } from './KnowledgeCard.tsx'
@@ -30,7 +31,7 @@ function PersonaSwitcher() {
             </MenuItem>
           ))}
           <MenuSeparator />
-          <MenuItem onSelect={() => app.setSettingsOpen(true)}>管理人设</MenuItem>
+          <MenuItem onSelect={() => app.openSettings('persona')}>管理人设</MenuItem>
         </MenuContent>
       </Menu>
     </div>
@@ -66,7 +67,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
               </button>
             </MenuTrigger>
             <MenuContent>
-              <MenuItem onSelect={() => app.setSettingsOpen(true)}>
+              <MenuItem onSelect={() => app.openSettings('model')}>
                 <Settings size={15} /> 设置
               </MenuItem>
               <MenuItem onSelect={app.toggleTheme}>
@@ -82,8 +83,19 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           </Menu>
         </div>
       </header>
-      <PersonaSwitcher />
+      {app.settingsOpen ? null : <PersonaSwitcher />}
       <div className="pane-scroll scroll">
+        {app.settingsOpen ? <SettingsPage /> : <CompanionBody />}
+      </div>
+      {app.settingsOpen ? null : <ActionBar />}
+    </section>
+  )
+}
+
+function CompanionBody() {
+  const app = useCompanion()
+  return (
+    <>
         <div className="section-title">
           <BookOpen size={16} />
           知识检索
@@ -145,6 +157,11 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
                 ))}
               </div>
             ) : null}
+            {app.provider === 'openai' ? null : (
+              <button type="button" className="linkish is-inline" onClick={() => app.openSettings('model')}>
+                配置大模型
+              </button>
+            )}
             <ReplyCard
               text={app.draft}
               editing={app.editing}
@@ -162,8 +179,6 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
             <p className="quiet">检索失败时不生成回复。</p>
           </div>
         ) : null}
-      </div>
-      <ActionBar />
-    </section>
+    </>
   )
 }
