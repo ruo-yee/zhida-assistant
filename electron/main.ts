@@ -4,6 +4,8 @@ import { boundsNearlyEqual, computeDockBounds } from '../src/dock/bounds.ts'
 import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
 import { findWeChatWindow } from './findWeChat.ts'
+import { createWeChatHost } from './wechat/host.ts'
+import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
 
 // Containers and some Linux desktops cannot install Chromium's setuid sandbox.
 if (process.platform === 'linux') {
@@ -25,11 +27,49 @@ let status: DockStatus = {
   platform: process.platform,
   detail: '正在查找微信窗口…',
 }
+const wechatHost = createWeChatHost()
+let wechatStatus: HostBridgeStatus = {
+  platform: process.platform,
+  available: false,
+  axTrusted: false,
+  wechatRunning: false,
+  dbReady: false,
+  detail: '正在检查微信…',
+  session: null,
+}
+let wechatTimer: ReturnType<typeof setInterval> | null = null
+let wechatTicking = false
 
 function publish(next: DockStatus) {
   if (next.mode === status.mode && next.detail === status.detail && next.side === status.side) return
   status = next
   mainWindow?.webContents.send('dock:status', status)
+}
+
+function publishWeChat(next: HostBridgeStatus) {
+  if (
+    next.detail === wechatStatus.detail &&
+    next.available === wechatStatus.available &&
+    next.dbReady === wechatStatus.dbReady &&
+    next.session?.id === wechatStatus.session?.id &&
+    next.session?.messages.at(-1)?.id === wechatStatus.session?.messages.at(-1)?.id
+  ) {
+    return
+  }
+  wechatStatus = next
+  mainWindow?.webContents.send('wechat:status', wechatStatus)
+}
+
+async function pollWeChat() {
+  if (wechatTicking) return
+  wechatTicking = true
+  try {
+    publishWeChat(await wechatHost.poll())
+  } catch {
+    publishWeChat({ ...wechatStatus, detail: '检查微信时出错，演示窗仍可使用。' })
+  } finally {
+    wechatTicking = false
+  }
 }
 
 function place(bounds: { x: number; y: number; width: number; height: number }) {
@@ -130,11 +170,18 @@ if (!app.requestSingleInstanceLock()) {
       await tick()
       return status
     })
+    ipcMain.handle('wechat:get-status', () => wechatStatus)
+    ipcMain.handle('wechat:insert', (_event, text: string) => wechatHost.insertText(String(text ?? '')))
+    ipcMain.handle('wechat:send', (_event, text: string) => wechatHost.sendText(String(text ?? '')))
     createWindow()
     void tick()
+    void pollWeChat()
     timer = setInterval(() => {
       void tick()
     }, 400)
+    wechatTimer = setInterval(() => {
+      void pollWeChat()
+    }, 1200)
     screen.on('display-metrics-changed', () => {
       void tick()
     })
@@ -149,5 +196,6 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('before-quit', () => {
     if (timer) clearInterval(timer)
+    if (wechatTimer) clearInterval(wechatTimer)
   })
 }

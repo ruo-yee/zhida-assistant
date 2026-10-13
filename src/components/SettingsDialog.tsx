@@ -16,7 +16,7 @@ export function SettingsDialog() {
       <DialogContent title="设置" description="人设、知识库和模型只影响回复草稿，不会改写微信里的记录。">
         {window.zhida ? (
           <p className="hint">
-            桌面窗口会贴在微信右侧，并跟着微信移动。macOS 需在「系统设置 → 隐私与安全性 → 辅助功能」里允许智答助手。知识库、草稿和密钥只留在本机。
+            桌面窗口会贴在微信右侧，并跟着微信移动。macOS 需在「系统设置 → 隐私与安全性 → 辅助功能」里允许智答助手，才能读取当前会话并写入输入框。数据库密钥放在本机 keys.json，程序只读打开，不会写回微信。
           </p>
         ) : null}
         <h3>人设</h3>

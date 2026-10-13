@@ -11,7 +11,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dr
 
 export function CompanionPane({ hidden }: { hidden: boolean }) {
   const app = useCompanion()
-  const chatLabel = formatChatType(app.session.chatType)
+  const chatLabel = formatChatType(app.focusSession.chatType)
   return (
     <section
       className={hidden ? 'companion is-hidden' : 'companion'}
@@ -24,8 +24,8 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           <Sparkles size={18} />
           智答助手
         </div>
-        <div className="chip" title={formatSessionChip(app.session.peerName, app.session.chatType, app.intent)}>
-          {app.session.peerName} · {chatLabel} ·{' '}
+        <div className="chip" title={formatSessionChip(app.focusSession.peerName, app.focusSession.chatType, app.intent)}>
+          {app.focusSession.peerName} · {chatLabel} ·{' '}
           <span key={app.intentFlashKey} className={app.intentFlashKey > 0 ? 'intent-flash' : undefined}>
             意图「{app.intent}」
           </span>

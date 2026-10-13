@@ -17,15 +17,11 @@ export interface WeChatSession {
 /**
  * Host chat bridge.
  *
- * Browser demo: `MockWeChatBridge` owns an in-memory session.
- *
- * Future Mac adapter, not shipped here:
- * - `getActiveSession` reads the frontmost chat title through Accessibility.
- * - History, if needed, comes from a read-only local database handle.
- *   Do not write, migrate, or ship key material for that database.
- * - `insertText` writes the composer through the UI.
- * - `sendText` is off unless the chat is on an allow-list the user turned on.
- * - The assistant window stays beside the chat window; it does not replace it.
+ * The browser demo uses `MockWeChatBridge`. The desktop shell adds a Mac
+ * adapter behind `window.zhida.wechat`: Accessibility reads the current
+ * chat and writes the composer, and a read-only SQLCipher handle can supply
+ * history when a private keys file is present. `sendText` runs only after
+ * the user clicks 一键发送. Nothing in the poll loop sends.
  */
 export interface WeChatBridge {
   getActiveSession(): Promise<WeChatSession>

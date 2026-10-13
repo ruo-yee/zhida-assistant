@@ -93,7 +93,7 @@ cp .env.example .env.local
 | 贴边 | `src/dock` `electron/findWeChat.ts` | macOS CGWindowList / 辅助功能，Windows Win32 | 其它系统悬浮 |
 | 检索 | `src/domain/knowledge` | 本地文档 + 关键词覆盖度 | 换成向量检索，命中结构不变 |
 | 回复 | `src/domain/reply` | 本地三套草稿，可选 OpenAI 兼容接口 | 同一 `ReplyGenerator` |
-| 会话桥 | `src/domain/wechat` | `MockWeChatBridge`（演示窗） | 把文字写进真正的微信输入框 |
+| 会话桥 | `src/domain/wechat` `electron/wechat` | 演示窗用 `MockWeChatBridge`。macOS 上用辅助功能读标题、写入输入框，并用只读 SQLCipher 读当前会话 | Windows 仍是演示窗 |
 
 `WeChatBridge` 只有三件事：`getActiveSession`、`insertText`、`sendText`。演示窗上的打字、模拟客户消息不属于这个接口。
 
@@ -133,13 +133,40 @@ cp .env.example .env.local
 
 插入到微信会把草稿放进左侧输入框，并出现一条「待发送」气泡。一键发送才会真正发出。
 
-## 还没接到真正的输入框
+## 微信记录与输入框
 
-窗口已经会贴住微信。把草稿写进微信输入框仍是下一步，接口保持 `WeChatBridge` 的 `getActiveSession`、`insertText`、`sendText`。
+演示窗不需要微信。桌面版在 macOS 上会尝试连接真正的微信；连不上时，「插入到微信」和「一键发送」仍只作用于演示窗。
 
-1. `getActiveSession`：用辅助功能读当前会话标题，区分私聊和群聊。
-2. 若需要更早的上下文，只读打开本地会话库。不要把密钥放进仓库，不要写回、迁移或修补这个库。
-3. `insertText`：把文字写入当前输入框，不发送。
-4. `sendText`：默认关闭。只有用户明确加进白名单的会话才允许代发。
+### 辅助功能
+
+到「系统设置 → 隐私与安全性 → 辅助功能」，允许智答助手（开发时允许终端或 Electron）。允许之后，程序用 Accessibility 读当前会话标题，找到最大的输入区，把草稿写进去。已有草稿时不会覆盖。
+
+「一键发送」只在你点击该按钮时运行：先确认输入框里的文字与草稿一致，再按一次回车。轮询、切换会话和快捷键都不会发送。三秒内相同内容不会重复发送。
+
+### 只读数据库
+
+历史消息来自本机微信的 SQLCipher 4 数据库，只用只读方式打开（`mode=ro`，并设置 `query_only`）。程序不会写回、迁移或修补这个库。
+
+密钥放在 mode `0600` 的 `keys.json`，不要提交，也不要写进命令行。查找顺序：
+
+1. 环境变量 `ZHIDA_KEY_FILE`
+2. `~/Library/Application Support/zhida-assistant/config.json` 里的 `key_file`
+3. `~/.config/zhida-assistant/keys.json`
+4. `~/Library/Application Support/zhida-assistant/keys.json`
+5. `ZHIDA_KEY_SEARCH_DIRS` 里每一层的 `keys.json`（不会扫描整个用户目录）
+
+清单可以是相对路径、绝对路径、文件头 16 字节的 salt，或包在 `keys` 里：
+
+```json
+{ "contact/contact.db": "<64位十六进制>", "message/message_0.db": "<64位十六进制>" }
+```
+
+账号目录默认在 `~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/<账号>/db_storage`。多个账号时，在 `config.json` 里写 `wechat_db_root` 指向那个 `db_storage`。macOS 需要本机的 `sqlcipher` 命令（`brew install sqlcipher`），或用 `SQLCIPHER_BIN` 指定路径。
+
+Windows 目前没有对应的读库和输入框写入，按钮继续走演示窗。
+
+## 还没覆盖的部分
+
+macOS 已能在你点击时插入和发送。点击输入区再粘贴的备用路径没有打开。Windows 的读库和界面自动化还没有接。屏幕文字识别没有接。
 
 同一套检索与回复以后可以抽成服务，再做网页座席台。那不改变「微信是主聊天界面」。

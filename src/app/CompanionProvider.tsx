@@ -14,6 +14,7 @@ import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever
 import { createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
 import type { IntentLabel, KnowledgeHit, Persona } from '../domain/types.ts'
 import { MockWeChatBridge, type DraftEcho } from '../domain/wechat/MockWeChatBridge.ts'
+import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
 import type { WeChatSession } from '../domain/wechat/WeChatBridge.ts'
 import { sleep } from '../lib/sleep.ts'
 import { loadSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
@@ -23,6 +24,8 @@ export type EmptyReason = 'nomatch' | 'disabled'
 
 interface CompanionContextValue {
   session: WeChatSession
+  focusSession: WeChatSession
+  hostDetail: string | null
   echo: DraftEcho | null
   popId: string | null
   phase: Phase
@@ -96,6 +99,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [bridge] = useState(() => new MockWeChatBridge())
   const [boot] = useState(loadSettings)
   const [session, setSession] = useState(() => bridge.getSnapshot())
+  const [tracked, setTracked] = useState<WeChatSession | null>(null)
+  const [hostDetail, setHostDetail] = useState<string | null>(null)
   const [echo, setEcho] = useState<DraftEcho | null>(null)
   const [popId, setPopId] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -141,6 +146,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const forceErrorRef = useRef(false)
   const regenToken = useRef(0)
   const toastTimer = useRef<number | null>(null)
+  const trackedRef = useRef<WeChatSession | null>(null)
   const seenCustomer = useRef<string | null>(null)
 
   const retrieverRef = useRef(createKnowledgeRetriever())
@@ -178,6 +184,19 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   }, [bridge])
 
   useEffect(() => {
+    const api = window.zhida?.wechat
+    if (!api) return
+    const apply = (status: HostBridgeStatus) => {
+      setHostDetail(status.detail)
+      const next = status.session
+      trackedRef.current = next
+      setTracked(next)
+    }
+    void api.getStatus().then(apply)
+    return api.onStatus(apply)
+  }, [])
+
+  useEffect(() => {
     const media = window.matchMedia('(max-width: 860px)')
     const apply = () => setNarrow(media.matches)
     apply()
@@ -185,7 +204,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener('change', apply)
   }, [])
 
-  const latestCustomer = [...session.messages].reverse().find((message) => message.role === 'customer')
+  const focusSession = tracked ?? session
+  const latestCustomer = [...focusSession.messages].reverse().find((message) => message.role === 'customer')
   const intent = classifyIntent(latestCustomer?.text ?? '')
 
   useEffect(() => {
@@ -220,7 +240,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         if (remain > 0) await sleep(remain)
       }
       try {
-        const active = await bridge.getActiveSession()
+        const active = trackedRef.current ?? (await bridge.getActiveSession())
         if (token !== tokenRef.current) return
         const customer = active.messages.filter((message) => message.role === 'customer')
         const latest = customer.at(-1)?.text ?? ''
@@ -294,12 +314,12 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   )
 
   const lastCustomerId = useMemo(() => {
-    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-      const message = session.messages[index]
+    for (let index = focusSession.messages.length - 1; index >= 0; index -= 1) {
+      const message = focusSession.messages[index]
       if (message?.role === 'customer') return message.id
     }
     return ''
-  }, [session.messages])
+  }, [focusSession.messages])
   const enabledKey = enabledDocIds.join('|')
 
   useEffect(() => {
@@ -312,24 +332,40 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const insertToWeChat = useCallback(async () => {
     const text = draftRef.current.trim()
     if (!text) return
+    const host = window.zhida?.wechat
+    if (host) {
+      const result = await host.insertText(text)
+      if (result.handled) {
+        notify(result.reason)
+        if (!result.ok) return
+      }
+    }
     await bridge.insertText(text)
     try {
       navigator.vibrate?.(12)
     } catch {
       /* vibration is optional */
     }
-  }, [bridge])
+  }, [bridge, notify])
 
   const sendSuggestion = useCallback(async () => {
     if (editing) return
     const text = committedRef.current.trim()
     if (!text) return
+    const host = window.zhida?.wechat
+    if (host) {
+      const result = await host.sendText(text)
+      if (result.handled) {
+        notify(result.reason)
+        if (!result.ok) return
+      }
+    }
     setSendState('sent')
     setWechatSending(true)
     await bridge.sendText(text)
     window.setTimeout(() => setWechatSending(false), 600)
     window.setTimeout(() => setSendState('idle'), 1200)
-  }, [bridge, editing])
+  }, [bridge, editing, notify])
 
   const sendComposer = useCallback(async () => {
     const text = bridge.getSnapshot().composerText.trim()
@@ -381,6 +417,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
 
   const value: CompanionContextValue = {
     session,
+    focusSession,
+    hostDetail,
     echo,
     popId,
     phase,
