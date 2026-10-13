@@ -427,6 +427,43 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.persona-bar { flex: none; padding: 8px 12px 0; }
+.persona-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+.persona-switch span { color: var(--muted); font-size: 12px; }
+.persona-switch strong {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.persona-list { display: flex; flex-direction: column; gap: 8px; }
+.persona-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+}
+.persona-row.is-on { border-color: var(--brand); background: var(--reply-bg); }
+.persona-row strong { font-size: 13px; }
+.persona-row small { margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.persona-actions { display: flex; justify-content: flex-start; margin-top: 10px; }
 .persona-note {
   margin: 10px 0 0;
   padding: 10px 12px;

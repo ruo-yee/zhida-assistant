@@ -5,7 +5,7 @@ import { rankDocuments } from '../knowledge/rank.ts'
 import { BASELINE_REPLY } from './mockReplies.ts'
 import { buildChatVariants } from './chatReplies.ts'
 import { fillThree, parseReplyBatch } from './parseReplies.ts'
-import { personaPrompt } from './personas.ts'
+import { migratePersonaSettings, personaPrompt, voiceOf } from './personas.ts'
 import { createReplyGenerator, groundingFor } from './ReplyGenerator.ts'
 
 describe('groundingFor', () => {
@@ -34,7 +34,7 @@ describe('chat and persona drafts', () => {
   it('writes three short chat lines without product facts', () => {
     const lines = buildChatVariants({
       tone: 'professional',
-      role: 'support',
+      voice: 'support',
       intent: '闲聊',
       customerText: '今天天气怎么样，适合出门吗？',
     })
@@ -50,8 +50,8 @@ describe('chat and persona drafts', () => {
     })
     const batch = await generator.generate({
       persona: 'professional',
-      role: 'support',
-      personaText: personaPrompt('support', ''),
+      voice: 'support',
+      personaText: personaPrompt('support', []),
       intent: '询问',
       customerText: SEED_CUSTOMER_TEXTS.at(-1) ?? '',
       grounding: 'grounded',
@@ -69,8 +69,8 @@ describe('chat and persona drafts', () => {
     })
     const batch = await generator.generate({
       persona: 'professional',
-      role: 'api',
-      personaText: personaPrompt('api', ''),
+      voice: 'api',
+      personaText: personaPrompt('api', []),
       intent: '询问',
       customerText: SEED_CUSTOMER_TEXTS.at(-1) ?? '',
       grounding: 'grounded',
@@ -79,5 +79,18 @@ describe('chat and persona drafts', () => {
     expect(batch.variants[0]?.startsWith('关于您问的两点，文档里是这样写的：')).toBe(true)
     expect(batch.variants[0]).toContain('资源 + 操作')
     expect(batch.variants.join('\n')).not.toMatch(/按你设定的人设|按平台客服的口径/)
+  })
+})
+
+describe('persona catalog', () => {
+  it('keeps builtins and migrates an older custom prompt', () => {
+    expect(voiceOf('casual')).toBe('casual')
+    expect(voiceOf('c_abc')).toBe('custom')
+    expect(personaPrompt('advisor', [])).toContain('专业顾问')
+    const migrated = migratePersonaSettings({ personaRole: 'custom', customPersona: '用短句，先复述目标。' })
+    expect(migrated.activePersonaId).toBe('c_migrated')
+    expect(migrated.customPersonas[0]?.name).toBe('自定义人设')
+    expect(migratePersonaSettings({ personaRole: 'api' }).activePersonaId).toBe('api')
+    expect(migratePersonaSettings({}).activePersonaId).toBe('support')
   })
 })

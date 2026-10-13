@@ -12,7 +12,16 @@ import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
 import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
-import { personaPrompt, type PersonaRole } from '../domain/reply/personas.ts'
+import {
+  cleanPrompt,
+  createPersonaId,
+  CUSTOM_PERSONA_LIMIT,
+  listPersonas,
+  personaPrompt,
+  resolvePersona,
+  voiceOf,
+  type SavedPersona,
+} from '../domain/reply/personas.ts'
 import type { ReplyGrounding } from '../domain/reply/ReplyGenerator.ts'
 import type { IntentLabel, KnowledgeHit, Persona } from '../domain/types.ts'
 import { MockWeChatBridge, type DraftEcho } from '../domain/wechat/MockWeChatBridge.ts'
@@ -61,10 +70,13 @@ interface CompanionContextValue {
   toggleTheme: () => void
   persona: Persona
   setPersona: (persona: Persona) => void
-  personaRole: PersonaRole
-  setPersonaRole: (role: PersonaRole) => void
-  customPersona: string
-  setCustomPersona: (value: string) => void
+  personas: ReturnType<typeof listPersonas>
+  activePersonaId: string
+  selectPersona: (id: string) => void
+  addPersona: () => void
+  renamePersona: (id: string, name: string) => void
+  updatePersonaPrompt: (id: string, prompt: string) => void
+  deletePersona: (id: string) => void
   docs: Array<{ id: string; title: string; version: string; enabled: boolean }>
   toggleDoc: (id: string) => void
   modelMode: ModelMode
@@ -135,8 +147,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [theme, setTheme] = useState(boot.theme)
   const [persona, setPersona] = useState(boot.persona)
-  const [personaRole, setPersonaRole] = useState(boot.personaRole)
-  const [customPersona, setCustomPersona] = useState(boot.customPersona)
+  const [activePersonaId, setActivePersonaId] = useState(boot.activePersonaId)
+  const [customPersonas, setCustomPersonas] = useState(boot.customPersonas)
   const [enabledDocIds, setEnabledDocIds] = useState(boot.enabledDocIds)
   const [modelMode, setModelMode] = useState(boot.modelMode)
   const [openaiBase, setOpenaiBase] = useState(boot.openaiBase)
@@ -151,8 +163,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
 
   const settingsRef = useRef({
     persona,
-    personaRole,
-    customPersona,
+    activePersonaId,
+    customPersonas,
     enabledDocIds,
     modelMode,
     openaiBase,
@@ -185,8 +197,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     settingsRef.current = {
       persona,
-      personaRole,
-      customPersona,
+      activePersonaId,
+      customPersonas,
       enabledDocIds,
       modelMode,
       openaiBase,
@@ -197,7 +209,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     committedRef.current = committed
     variantsRef.current = variants
     indexRef.current = variantIndex
-  }, [persona, personaRole, customPersona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, draft, committed, variants, variantIndex])
+  }, [persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, draft, committed, variants, variantIndex])
 
   const notify = useCallback((text: string) => {
     setToast(text)
@@ -253,8 +265,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     saveSettings({
       theme,
       persona,
-      personaRole,
-      customPersona,
+      activePersonaId,
+      customPersonas,
       enabledDocIds,
       modelMode,
       openaiBase,
@@ -262,7 +274,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       openaiKey,
     })
     document.documentElement.dataset.theme = theme
-  }, [theme, persona, personaRole, customPersona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
+  }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
 
   const runPipeline = useCallback(
     async (opts?: { retry?: boolean; fail?: boolean }) => {
@@ -298,10 +310,11 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         const intentNow = classifyIntent(latest)
         const grounding = groundingFor(intentNow, enabled.length === 0 ? [] : found)
         const visibleHits = grounding === 'grounded' ? found : []
+        const activePersona = resolvePersona(settingsRef.current.activePersonaId, settingsRef.current.customPersonas)
         const batch = await generatorRef.current.generate({
           persona: settingsRef.current.persona,
-          role: settingsRef.current.personaRole,
-          personaText: personaPrompt(settingsRef.current.personaRole, settingsRef.current.customPersona),
+          voice: voiceOf(activePersona.id),
+          personaText: personaPrompt(activePersona.id, settingsRef.current.customPersonas),
           intent: intentNow,
           customerText: latest,
           grounding,
@@ -350,7 +363,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => {
       tokenRef.current += 1
     }
-  }, [lastCustomerId, sessionEpoch, persona, personaRole, enabledKey, modelMode, runPipeline])
+  }, [lastCustomerId, sessionEpoch, persona, activePersonaId, enabledKey, modelMode, runPipeline])
 
   const insertToWeChat = useCallback(async () => {
     const text = draftRef.current.trim()
@@ -484,10 +497,33 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
     persona,
     setPersona,
-    personaRole,
-    setPersonaRole,
-    customPersona,
-    setCustomPersona,
+    personas: listPersonas(customPersonas),
+    activePersonaId,
+    selectPersona: (id) => {
+      if (!listPersonas(customPersonas).some((item) => item.id === id)) return
+      setActivePersonaId(id)
+    },
+    addPersona: () => {
+      setCustomPersonas((current) => {
+        if (current.length >= CUSTOM_PERSONA_LIMIT) return current
+        const next: SavedPersona = { id: createPersonaId(), name: '自定义人设', prompt: '' }
+        setActivePersonaId(next.id)
+        return [...current, next]
+      })
+    },
+    renamePersona: (id, name) => {
+      const next = name.replace(/\s+/g, ' ').slice(0, 24)
+      setCustomPersonas((current) => current.map((item) => (item.id === id ? { ...item, name: next } : item)))
+    },
+    updatePersonaPrompt: (id, prompt) => {
+      setCustomPersonas((current) =>
+        current.map((item) => (item.id === id ? { ...item, prompt: cleanPrompt(prompt) } : item)),
+      )
+    },
+    deletePersona: (id) => {
+      setCustomPersonas((current) => current.filter((item) => item.id !== id))
+      setActivePersonaId((current) => (current === id ? 'support' : current))
+    },
     docs: CORPUS.map((doc) => ({
       id: doc.id,
       title: doc.title,

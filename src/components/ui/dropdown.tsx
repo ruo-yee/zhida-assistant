@@ -9,10 +9,18 @@ export function MenuTrigger({ children }: { children: ReactNode }) {
   return <DropdownMenu.Trigger asChild>{children}</DropdownMenu.Trigger>
 }
 
-export function MenuContent({ children, className = 'menu' }: { children: ReactNode; className?: string }) {
+export function MenuContent({
+  children,
+  className = 'menu',
+  align = 'end',
+}: {
+  children: ReactNode
+  className?: string
+  align?: 'start' | 'center' | 'end'
+}) {
   return (
     <DropdownMenu.Portal>
-      <DropdownMenu.Content className={className} align="end" sideOffset={6}>
+      <DropdownMenu.Content className={className} align={align} sideOffset={6}>
         {children}
       </DropdownMenu.Content>
     </DropdownMenu.Portal>

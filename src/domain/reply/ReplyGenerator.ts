@@ -3,13 +3,13 @@ import { buildChatVariants } from './chatReplies.ts'
 import { buildMockVariants } from './mockReplies.ts'
 import { completeOpenAI, type ModelConfig } from './openaiReply.ts'
 import { fillThree } from './parseReplies.ts'
-import type { PersonaRole } from './personas.ts'
+import type { PersonaVoice } from './personas.ts'
 
 export type ReplyGrounding = 'grounded' | 'chat'
 
 export interface ReplyInput {
   persona: Persona
-  role: PersonaRole
+  voice: PersonaVoice
   personaText: string
   intent: IntentLabel
   customerText: string
@@ -42,21 +42,35 @@ function localVariants(input: ReplyInput) {
   if (input.grounding === 'chat') {
     return buildChatVariants({
       tone: input.persona,
-      role: input.role,
+      voice: input.voice,
       intent: input.intent,
       customerText: input.customerText,
     })
   }
   const drafts = buildMockVariants({ persona: input.persona, hits: input.hits })
-  if (input.role === 'api') return drafts.map(asApiVoice)
-  return drafts
+  return drafts.map((text) => styleGrounded(text, input.voice))
 }
 
-function asApiVoice(text: string) {
+function styleGrounded(text: string, voice: PersonaVoice) {
+  if (voice === 'api') {
+    return text
+      .replace(/^关于您提到的两个问题：/, '关于您问的两点，文档里是这样写的：')
+      .replace(/^分两点说明：/, '文档里分两点：')
+      .replace(/^您这两个问题可以这样理解：/, '按文档，这两点可以这样理解：')
+  }
+  if (voice === 'casual') {
+    return text
+      .replace(/^关于您提到的两个问题：/, '这两点可以这样说：')
+      .replace(/^分两点说明：/, '简单说两点：')
+      .replace(/^您这两个问题可以这样理解：/, '换个轻松点的说法：')
+  }
+  if (voice === 'advisor') {
+    return text
+      .replace(/^关于您提到的两个问题：/, '按现有说明，建议这样处理：')
+      .replace(/^分两点说明：/, '建议分两点处理：')
+      .replace(/^您这两个问题可以这样理解：/, '建议这样理解这两点：')
+  }
   return text
-    .replace(/^关于您提到的两个问题：/, '关于您问的两点，文档里是这样写的：')
-    .replace(/^分两点说明：/, '文档里分两点：')
-    .replace(/^您这两个问题可以这样理解：/, '按文档，这两点可以这样理解：')
 }
 
 export function createReplyGenerator(options: {

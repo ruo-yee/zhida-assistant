@@ -1,14 +1,8 @@
 import { useCompanion } from '../app/CompanionProvider.tsx'
-import { PERSONA_PRESETS, type PersonaRole } from '../domain/reply/personas.ts'
+import { cleanName, CUSTOM_PERSONA_LIMIT } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
 import { Button } from './ui/button.tsx'
 import { Dialog, DialogContent } from './ui/dialog.tsx'
-
-const ROLES: Array<{ id: PersonaRole; title: string; detail: string }> = [
-  { id: 'support', title: PERSONA_PRESETS.support.title, detail: PERSONA_PRESETS.support.detail },
-  { id: 'api', title: PERSONA_PRESETS.api.title, detail: PERSONA_PRESETS.api.detail },
-  { id: 'custom', title: '自定义人设', detail: '用你写的说明起草三条回复' },
-]
 
 const TONES: Array<{ id: Persona; title: string; detail: string }> = [
   { id: 'professional', title: '专业简明', detail: '先给结论，适合直接发到微信' },
@@ -18,6 +12,8 @@ const TONES: Array<{ id: Persona; title: string; detail: string }> = [
 
 export function SettingsDialog() {
   const app = useCompanion()
+  const active = app.personas.find((item) => item.id === app.activePersonaId)
+  const customCount = app.personas.filter((item) => !item.builtin).length
   return (
     <Dialog open={app.settingsOpen} onOpenChange={app.setSettingsOpen}>
       <DialogContent title="设置" description="角色和语气只改回复草稿。插入到微信和一键发送都要你再点一次。">
@@ -26,36 +22,61 @@ export function SettingsDialog() {
             桌面窗口会贴在微信右侧，并跟着微信移动。macOS 需在「系统设置 → 隐私与安全性 → 辅助功能」里允许智答助手，才能读取当前会话并写入输入框。数据库密钥放在本机 keys.json，程序只读打开，不会写回微信。
           </p>
         ) : null}
-        <h3>角色</h3>
-        <div className="seg" role="radiogroup" aria-label="角色">
-          {ROLES.map((role) => (
+        <h3>人设</h3>
+        <div className="persona-list" role="radiogroup" aria-label="人设">
+          {app.personas.map((item) => (
             <button
-              key={role.id}
+              key={item.id}
               type="button"
               role="radio"
-              aria-checked={app.personaRole === role.id}
-              className={app.personaRole === role.id ? 'is-on' : undefined}
-              onClick={() => app.setPersonaRole(role.id)}
+              aria-checked={app.activePersonaId === item.id}
+              className={app.activePersonaId === item.id ? 'persona-row is-on' : 'persona-row'}
+              onClick={() => app.selectPersona(item.id)}
             >
-              <strong>{role.title}</strong>
-              <small>{role.detail}</small>
+              <strong>{item.name || '未命名人设'}</strong>
+              <small>{item.builtin ? item.detail : '自定义'}</small>
             </button>
           ))}
         </div>
-        {app.personaRole === 'custom' ? (
-          <label className="field">
-            <span>自定义人设</span>
-            <textarea
-              value={app.customPersona}
-              maxLength={2000}
-              placeholder="例如：你是行业顾问。回复短、具体，先复述对方的目标，再给一步可执行的建议。"
-              onChange={(event) => app.setCustomPersona(event.target.value)}
-            />
-            <span>写完后点「重新检索」。接上模型后，三条候选会按这段说明来写；本地草稿仍给出可发送的短句。</span>
-          </label>
-        ) : (
-          <p className="persona-note">{PERSONA_PRESETS[app.personaRole].text}</p>
-        )}
+        {active ? (
+          active.builtin ? (
+            <p className="persona-note">{active.prompt}</p>
+          ) : (
+            <>
+              <label className="field">
+                <span>名称</span>
+                <input
+                  value={active.name}
+                  maxLength={24}
+                  onChange={(event) => app.renamePersona(active.id, event.target.value)}
+                  onBlur={() => {
+                    if (!active.name.trim()) app.renamePersona(active.id, cleanName(''))
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>人设说明</span>
+                <textarea
+                  value={active.prompt}
+                  maxLength={2000}
+                  placeholder="例如：你是行业顾问。回复短、具体，先复述对方的目标，再给一步可执行的建议。"
+                  onChange={(event) => app.updatePersonaPrompt(active.id, event.target.value)}
+                />
+              </label>
+              <div className="persona-actions">
+                <Button variant="outline" size="sm" onClick={() => app.deletePersona(active.id)}>
+                  删除此人设
+                </Button>
+              </div>
+            </>
+          )
+        ) : null}
+        <div className="persona-actions">
+          <Button variant="outline" size="sm" disabled={customCount >= CUSTOM_PERSONA_LIMIT} onClick={app.addPersona}>
+            添加人设
+          </Button>
+        </div>
+        <p className="hint">预设不能改。自定义的名称和说明保存在这台电脑上。改完说明后点「重新检索」，当前人设会用于闲聊和有摘录的回复。</p>
 
         <h3>语气</h3>
         <div className="seg" role="radiogroup" aria-label="语气">

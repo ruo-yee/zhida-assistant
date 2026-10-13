@@ -9,6 +9,33 @@ import { ReplyCard } from './ReplyCard.tsx'
 import { EmptyState, ErrorState, ReplySkeleton, SkeletonState } from './States.tsx'
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dropdown.tsx'
 
+function PersonaSwitcher() {
+  const app = useCompanion()
+  const active = app.personas.find((item) => item.id === app.activePersonaId)
+  return (
+    <div className="persona-bar">
+      <Menu>
+        <MenuTrigger>
+          <button type="button" className="persona-switch" aria-label="切换人设">
+            <span>人设</span>
+            <strong>{active?.name || '客服助手'}</strong>
+          </button>
+        </MenuTrigger>
+        <MenuContent align="start">
+          {app.personas.map((item) => (
+            <MenuItem key={item.id} onSelect={() => app.selectPersona(item.id)}>
+              {item.name || '未命名人设'}
+              {item.id === app.activePersonaId ? ' · 当前' : ''}
+            </MenuItem>
+          ))}
+          <MenuSeparator />
+          <MenuItem onSelect={() => app.setSettingsOpen(true)}>管理人设</MenuItem>
+        </MenuContent>
+      </Menu>
+    </div>
+  )
+}
+
 export function CompanionPane({ hidden }: { hidden: boolean }) {
   const app = useCompanion()
   const chatLabel = formatChatType(app.focusSession.chatType)
@@ -54,6 +81,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           </Menu>
         </div>
       </header>
+      <PersonaSwitcher />
       <div className="pane-scroll scroll">
         <div className="section-title">
           <BookOpen size={16} />
