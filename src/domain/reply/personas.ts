@@ -51,6 +51,13 @@ export const BUILTIN_PERSONAS: readonly PersonaRecord[] = [
   },
 ]
 
+/** Same customer message, three voices. Other personas stay in the overflow menu. */
+export const QUICK_PERSONAS = [
+  { id: 'support', label: '客服' },
+  { id: 'casual', label: '闲聊' },
+  { id: 'advisor', label: '顾问' },
+] as const
+
 const BUILTIN_IDS = new Set(BUILTIN_PERSONAS.map((persona) => persona.id))
 const NAME_LIMIT = 24
 const PROMPT_LIMIT = 2000

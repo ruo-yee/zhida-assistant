@@ -1,5 +1,7 @@
 import { Pencil } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import type { ReplyCitation } from '../domain/reply/citation.ts'
+import { CiteBadge } from './CiteBadge.tsx'
 
 export function ReplyCard({
   text,
@@ -9,6 +11,7 @@ export function ReplyCard({
   onStartEdit,
   onSave,
   onCancel,
+  citation,
 }: {
   text: string
   editing: boolean
@@ -17,6 +20,7 @@ export function ReplyCard({
   onStartEdit: () => void
   onSave: () => void
   onCancel: () => void
+  citation?: ReplyCitation | null
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -33,6 +37,7 @@ export function ReplyCard({
 
   return (
     <div className={editing ? 'reply-card is-editing' : 'reply-card'}>
+      {citation ? <CiteBadge citation={citation} /> : null}
       <button type="button" className="pencil" aria-label="编辑回复" aria-pressed={editing} onClick={onStartEdit}>
         <Pencil size={15} />
       </button>

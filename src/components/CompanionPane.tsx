@@ -1,12 +1,15 @@
 import { BookOpen, Lightbulb, Moon, MoreHorizontal, Settings, Sparkles, Sun } from 'lucide-react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
 import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
+import { citationForReply } from '../domain/reply/citation.ts'
+import { QUICK_PERSONAS } from '../domain/reply/personas.ts'
 import { formatChatType, formatResultCount, formatSessionChip } from '../domain/format.ts'
 import { ActionBar } from './ActionBar.tsx'
 import { SettingsPage } from './SettingsPage.tsx'
 import { DemoMenuItems } from './DemoMenu.tsx'
 import { DockStatusBar } from './DockStatusBar.tsx'
 import { KnowledgeCard } from './KnowledgeCard.tsx'
+import { CiteBadge } from './CiteBadge.tsx'
 import { ReplyCard } from './ReplyCard.tsx'
 import { EmptyState, ErrorState, ReplySkeleton, SkeletonState } from './States.tsx'
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dropdown.tsx'
@@ -14,16 +17,31 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dr
 function PersonaSwitcher() {
   const app = useCompanion()
   const active = app.personas.find((item) => item.id === app.activePersonaId)
+  const quickOn = QUICK_PERSONAS.some((item) => item.id === app.activePersonaId)
   return (
     <div className="persona-bar">
+      <span className="persona-kicker">同一条消息</span>
+      <div className="persona-quick" role="radiogroup" aria-label="同一条消息的回复风格">
+        {QUICK_PERSONAS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={app.activePersonaId === item.id}
+            className={app.activePersonaId === item.id ? 'is-on' : undefined}
+            onClick={() => app.selectPersona(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
       <Menu>
         <MenuTrigger>
-          <button type="button" className="persona-switch" aria-label="切换人设">
-            <span>人设</span>
-            <strong>{active?.name || '客服助手'}</strong>
+          <button type="button" className="persona-more" aria-label="更多人设">
+            {quickOn ? '更多' : active?.name || '人设'}
           </button>
         </MenuTrigger>
-        <MenuContent align="start">
+        <MenuContent align="end">
           {app.personas.map((item) => (
             <MenuItem key={item.id} onSelect={() => app.selectPersona(item.id)}>
               {item.name || '未命名人设'}
@@ -103,6 +121,36 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
   )
 }
 
+function CandidateList() {
+  const app = useCompanion()
+  const citation = citationForReply(app.replyMode, app.hits)
+  return (
+    <div className="candidates" role="radiogroup" aria-label="回复候选">
+      <p className="candidate-hint">
+        {app.provider === 'openai'
+          ? `三条回复由模型写成，上下文是当前会话最近 ${CHAT_CONTEXT_LIMIT} 条消息。点一条，或改完再插入。发送仍要再点一次。`
+          : '当前是本地草稿。模型不可用或已关闭时才会这样。点一条，或改完再插入。发送仍要再点一次。'}
+      </p>
+      {app.variants.map((text, index) => (
+        <button
+          key={`${index}-${text.slice(0, 24)}`}
+          type="button"
+          role="radio"
+          aria-checked={app.variantIndex === index}
+          className={app.variantIndex === index ? 'candidate is-on' : 'candidate'}
+          onClick={() => app.selectVariant(index)}
+        >
+          <span className="candidate-n">{index + 1}</span>
+          <span className="candidate-body">
+            <CiteBadge citation={citation} />
+            <span className="candidate-text">{text}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function CompanionBody() {
   const app = useCompanion()
   return (
@@ -147,26 +195,7 @@ function CompanionBody() {
         {app.phase === 'ready' ? (
           <div className="reply-wrap fade-in">
             {app.variants.length > 0 ? (
-              <div className="candidates" role="radiogroup" aria-label="回复候选">
-                <p className="candidate-hint">
-                  {app.provider === 'openai'
-                    ? `三条回复由模型写成，上下文是当前会话最近 ${CHAT_CONTEXT_LIMIT} 条消息。点一条，或改完再插入。发送仍要再点一次。`
-                    : '当前是本地草稿。模型不可用或已关闭时才会这样。点一条，或改完再插入。发送仍要再点一次。'}
-                </p>
-                {app.variants.map((text, index) => (
-                  <button
-                    key={`${index}-${text.slice(0, 24)}`}
-                    type="button"
-                    role="radio"
-                    aria-checked={app.variantIndex === index}
-                    className={app.variantIndex === index ? 'candidate is-on' : 'candidate'}
-                    onClick={() => app.selectVariant(index)}
-                  >
-                    <span className="candidate-n">{index + 1}</span>
-                    <span className="candidate-text">{text}</span>
-                  </button>
-                ))}
-              </div>
+              <CandidateList />
             ) : null}
             {app.provider === 'openai' ? null : (
               <button type="button" className="linkish is-inline" onClick={() => app.openSettings('model')}>
@@ -177,6 +206,7 @@ function CompanionBody() {
               text={app.draft}
               editing={app.editing}
               dirty={app.dirty}
+              citation={citationForReply(app.replyMode, app.hits)}
               onChange={app.setDraft}
               onStartEdit={app.startEdit}
               onSave={app.saveEdit}
