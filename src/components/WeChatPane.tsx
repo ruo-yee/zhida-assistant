@@ -32,6 +32,7 @@ export function WeChatPane({ hidden }: { hidden: boolean }) {
 
   return (
     <section className={hidden ? 'wechat is-hidden' : 'wechat'} aria-label="微信演示">
+      <p className="demo-banner">这是演示数据，不是你的微信。桌面版贴住的是系统里的微信窗口。</p>
       <header className="pane-header flex items-center gap-2 px-2 py-2">
         <button type="button" className="icon-btn" aria-label="返回" onClick={() => app.notify('演示窗口没有上一页')}>
           <ChevronLeft size={20} />

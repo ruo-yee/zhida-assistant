@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
 import { MODEL_PAGE_FIELDS, SETTINGS_SECTIONS, type ModelPageFieldId } from '../app/settingsSections.ts'
+import { GATEKEEPER_NOTE } from '../domain/wechat/accessibilityCopy.ts'
 import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
 import { cleanName, CUSTOM_PERSONA_LIMIT } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
@@ -153,7 +154,9 @@ function ModelFields({ showKey, onToggleKey }: { showKey: boolean; onToggleKey: 
           <label htmlFor={`model-${field.id}`}>{field.label}</label>
           {field.kind === 'secret' ? (
             <span id="model-key-note" className="field-note">
-              可选。本机 Ollama 留空。只保存在这台设备，不会上传。
+              {app.keyStoredSecurely
+                ? '可选。本机 Ollama 留空。桌面版用系统加密保存在本机，不写入页面存储，也不会上传。'
+                : '可选。本机 Ollama 留空。浏览器演示只能写在这台电脑的本地存储里，不会上传。'}
             </span>
           ) : null}
           <div className={field.kind === 'secret' ? 'field-secret' : undefined}>
@@ -261,26 +264,71 @@ function PersonaSettings() {
   )
 }
 
+const SOURCES = [
+  { id: 'builtin' as const, title: '内置', detail: '随应用附带' },
+  { id: 'folder' as const, title: '本地文件夹', detail: 'Markdown 和文本' },
+  { id: 'obsidian' as const, title: 'Obsidian', detail: '一个库文件夹' },
+]
+
 function KnowledgeSettings() {
   const app = useCompanion()
+  const external = app.knowledgeSource !== 'builtin'
+  const path = app.knowledgeSource === 'obsidian' ? app.obsidianPath : app.folderPath
   return (
     <>
       <h3>知识库</h3>
-      <p className="hint">打开的文档可以附在回复里，作为知识摘录。它不是上下文，上下文仍是当前微信会话。</p>
-      {app.docs.map((doc) => (
-        <div className="doc-row" key={doc.id}>
-          <span className="name">{doc.title}</span>
-          <span className="ver">{doc.version}</span>
+      <p className="hint">知识摘录可以附在回复后面。它不是上下文，上下文仍是当前微信会话里的对话。</p>
+      <div className="seg" role="radiogroup" aria-label="知识来源">
+        {SOURCES.map((item) => (
           <button
+            key={item.id}
             type="button"
-            role="switch"
-            aria-checked={doc.enabled}
-            aria-label={`${doc.enabled ? '关闭' : '打开'} ${doc.title}`}
-            className={doc.enabled ? 'switch is-on' : 'switch'}
-            onClick={() => app.toggleDoc(doc.id)}
-          />
-        </div>
-      ))}
+            role="radio"
+            aria-checked={app.knowledgeSource === item.id}
+            className={app.knowledgeSource === item.id ? 'is-on' : undefined}
+            onClick={() => app.setKnowledgeSource(item.id)}
+          >
+            <strong>{item.title}</strong>
+            <small>{item.detail}</small>
+          </button>
+        ))}
+      </div>
+      {external ? (
+        <>
+          <label className="field">
+            <span>{app.knowledgeSource === 'obsidian' ? 'Obsidian 库' : '文件夹'}</span>
+            <input
+              value={path}
+              placeholder={app.knowledgeSource === 'obsidian' ? '含 .obsidian 的库路径' : '含 Markdown 或文本的文件夹'}
+              onChange={(event) => app.setLibraryPath(event.target.value)}
+            />
+          </label>
+          <div className="persona-actions">
+            <Button variant="outline" size="sm" disabled={!window.zhida} onClick={app.chooseLibraryFolder}>
+              选择文件夹
+            </Button>
+          </div>
+          <p className={app.libraryStatus.tone === 'ok' ? 'settings-status' : 'hint'} role="status">
+            {app.libraryStatus.text}
+          </p>
+          {app.libraryStatus.tone !== 'ok' ? <p className="hint">回复仍用内置知识库。</p> : null}
+        </>
+      ) : (
+        app.docs.map((doc) => (
+          <div className="doc-row" key={doc.id}>
+            <span className="name">{doc.title}</span>
+            <span className="ver">{doc.version}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={doc.enabled}
+              aria-label={`${doc.enabled ? '关闭' : '打开'} ${doc.title}`}
+              className={doc.enabled ? 'switch is-on' : 'switch'}
+              onClick={() => app.toggleDoc(doc.id)}
+            />
+          </div>
+        ))
+      )}
     </>
   )
 }
@@ -302,9 +350,18 @@ function LookSettings() {
         />
       </div>
       {window.zhida ? (
-        <p className="hint">
-          贴边或写入输入框需要授权时，用窗口里的「打开辅助功能设置」或「打开屏幕录制设置」。打包后的列表名是「智答助手」，开发运行时是「Electron」。允许后会自动继续。
-        </p>
+        <>
+          <h3>辅助功能</h3>
+          <p className="hint">
+            贴边或写入输入框需要授权时，点下面的按钮即可打开系统设置。打包后的列表名是「智答助手」，开发运行时是「Electron」。允许后会自动继续。
+          </p>
+          <div className="persona-actions">
+            <Button variant="outline" size="sm" onClick={() => void window.zhida?.openAccessibilitySettings()}>
+              打开辅助功能设置
+            </Button>
+          </div>
+          <p className="hint">{GATEKEEPER_NOTE}</p>
+        </>
       ) : null}
     </>
   )

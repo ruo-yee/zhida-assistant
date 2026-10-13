@@ -10,7 +10,9 @@ import {
 } from 'react'
 import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
+import { describeLibrary, type IndexFailure, type IndexPhase } from '../domain/knowledge/indexStatus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
+import { retrievalLibrary, type KnowledgeSource } from '../domain/knowledge/library.ts'
 import { rememberOutbound, turnsWithOutbound, type PendingOutbound } from '../domain/reply/chatContext.ts'
 import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
 import {
@@ -29,7 +31,7 @@ import { MockWeChatBridge, type DraftEcho } from '../domain/wechat/MockWeChatBri
 import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
 import type { WeChatSession } from '../domain/wechat/WeChatBridge.ts'
 import { sleep } from '../lib/sleep.ts'
-import { SETTINGS_VERSION, loadSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
+import { SETTINGS_VERSION, loadSettings, persistableSettings, saveSettings, type ModelMode, type ThemeName } from './settings.ts'
 import type { SettingsSection } from './settingsSections.ts'
 
 export type Phase = 'loading' | 'ready' | 'empty' | 'error'
@@ -91,6 +93,19 @@ interface CompanionContextValue {
   setOpenaiBase: (value: string) => void
   setOpenaiModel: (value: string) => void
   setOpenaiKey: (value: string) => void
+  keyStoredSecurely: boolean
+  knowledgeSource: KnowledgeSource
+  setKnowledgeSource: (source: KnowledgeSource) => void
+  folderPath: string
+  obsidianPath: string
+  setLibraryPath: (value: string) => void
+  libraryStatus: { tone: 'ok' | 'wait' | 'warn'; text: string }
+  chooseLibraryFolder: () => void
+  showDemo: boolean
+  toggleDemo: () => void
+  pendingSend: { text: string; target: 'wechat' | 'demo' } | null
+  cancelSend: () => void
+  confirmSend: () => void
   rerun: () => void
   setDraft: (value: string) => void
   startEdit: () => void
@@ -167,6 +182,14 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [openaiBase, setOpenaiBase] = useState(boot.openaiBase)
   const [openaiModel, setOpenaiModel] = useState(boot.openaiModel)
   const [openaiKey, setOpenaiKey] = useState(boot.openaiKey)
+  const [knowledgeSource, setKnowledgeSource] = useState(boot.knowledgeSource)
+  const [folderPath, setFolderPath] = useState(boot.folderPath)
+  const [obsidianPath, setObsidianPath] = useState(boot.obsidianPath)
+  const [libraryFiles, setLibraryFiles] = useState<Array<{ id: string; title: string; body: string }>>([])
+  const [libraryPhase, setLibraryPhase] = useState<IndexPhase>('idle')
+  const [libraryCode, setLibraryCode] = useState<IndexFailure | null>(null)
+  const [showDemo, setShowDemo] = useState(() => !window.zhida)
+  const [pendingSend, setPendingSend] = useState<{ text: string; via: 'suggestion' | 'composer'; target: 'wechat' | 'demo' } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -183,6 +206,10 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     openaiBase,
     openaiModel,
     openaiKey,
+    knowledgeSource,
+    folderPath,
+    obsidianPath,
+    libraryFiles,
   })
   const draftRef = useRef(draft)
   const committedRef = useRef(committed)
@@ -196,7 +223,6 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const outboundRef = useRef<PendingOutbound[]>([])
   const seenCustomer = useRef<string | null>(null)
 
-  const retrieverRef = useRef(createKnowledgeRetriever())
   const generatorRef = useRef(
     createReplyGenerator({
       resolveConfig: () => ({
@@ -218,12 +244,16 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       openaiBase,
       openaiModel,
       openaiKey,
+      knowledgeSource,
+      folderPath,
+      obsidianPath,
+      libraryFiles,
     }
     draftRef.current = draft
     committedRef.current = committed
     variantsRef.current = variants
     indexRef.current = variantIndex
-  }, [persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, draft, committed, variants, variantIndex])
+  }, [persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, knowledgeSource, folderPath, obsidianPath, libraryFiles, draft, committed, variants, variantIndex])
 
   const notify = useCallback((text: string) => {
     setToast(text)
@@ -238,6 +268,55 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       setPopId(bridge.getLastSentId())
     })
   }, [bridge])
+
+  useEffect(() => {
+    const read = window.zhida?.readModelKey
+    if (!read) return
+    void read().then((key) => {
+      if (key) setOpenaiKey(key)
+      else if (boot.openaiKey) void window.zhida?.writeModelKey(boot.openaiKey)
+    })
+  }, [boot.openaiKey])
+
+  useEffect(() => {
+    if (knowledgeSource === 'builtin') {
+      setLibraryFiles([])
+      setLibraryPhase('idle')
+      setLibraryCode(null)
+      return
+    }
+    const folder = knowledgeSource === 'obsidian' ? obsidianPath : folderPath
+    if (!folder.trim()) {
+      setLibraryFiles([])
+      setLibraryPhase('idle')
+      setLibraryCode(null)
+      return
+    }
+    const index = window.zhida?.indexLibrary
+    if (!index) {
+      setLibraryFiles([])
+      setLibraryPhase('desktop')
+      setLibraryCode(null)
+      return
+    }
+    let cancel = false
+    setLibraryPhase('loading')
+    void index(folder, knowledgeSource).then((result) => {
+      if (cancel) return
+      if (!result.ok) {
+        setLibraryFiles([])
+        setLibraryCode(result.code)
+        setLibraryPhase(result.code === 'empty' ? 'empty' : 'error')
+        return
+      }
+      setLibraryFiles(result.files)
+      setLibraryCode(null)
+      setLibraryPhase('ready')
+    })
+    return () => {
+      cancel = true
+    }
+  }, [knowledgeSource, folderPath, obsidianPath])
 
   useEffect(() => {
     const api = window.zhida?.wechat
@@ -276,20 +355,30 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   }, [latestCustomer])
 
   useEffect(() => {
-    saveSettings({
-      theme,
-      persona,
-      activePersonaId,
-      customPersonas,
-      enabledDocIds,
-      modelMode,
-      openaiBase,
-      openaiModel,
-      openaiKey,
-      settingsVersion: SETTINGS_VERSION,
-    })
+    const secureKey = Boolean(window.zhida?.writeModelKey)
+    saveSettings(
+      persistableSettings(
+        {
+          theme,
+          persona,
+          activePersonaId,
+          customPersonas,
+          enabledDocIds,
+          knowledgeSource,
+          folderPath,
+          obsidianPath,
+          modelMode,
+          openaiBase,
+          openaiModel,
+          openaiKey,
+          settingsVersion: SETTINGS_VERSION,
+        },
+        secureKey,
+      ),
+    )
+    if (secureKey) void window.zhida?.writeModelKey(openaiKey)
     document.documentElement.dataset.theme = theme
-  }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
+  }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, knowledgeSource, folderPath, obsidianPath, modelMode, openaiBase, openaiModel, openaiKey])
 
   const runPipeline = useCallback(
     async (opts?: { retry?: boolean; fail?: boolean }) => {
@@ -319,9 +408,15 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           throw new Error('retrieval failed')
         }
         const enabled = settingsRef.current.enabledDocIds
-        const found = await retrieverRef.current.search({
-          messages: customer.slice(-4).map((message) => ({ role: message.role, text: message.text })),
+        const library = retrievalLibrary({
+          source: settingsRef.current.knowledgeSource,
+          files: settingsRef.current.libraryFiles,
+          notes: [],
           enabledDocIds: enabled,
+        })
+        const found = await createKnowledgeRetriever(library.docs).search({
+          messages: customer.slice(-4).map((message) => ({ role: message.role, text: message.text })),
+          enabledDocIds: library.enabledDocIds,
         })
         if (token !== tokenRef.current) return
         const intentNow = classifyIntent(latest)
@@ -387,13 +482,14 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return ''
   }, [focusSession.messages])
   const enabledKey = enabledDocIds.join('|')
+  const libraryKey = `${knowledgeSource}:${libraryPhase}:${libraryFiles.length}`
 
   useEffect(() => {
     void runPipeline({ retry: true })
     return () => {
       tokenRef.current += 1
     }
-  }, [focusSession.id, lastCustomerId, sessionEpoch, persona, activePersonaId, enabledKey, modelMode, runPipeline])
+  }, [focusSession.id, lastCustomerId, sessionEpoch, persona, activePersonaId, enabledKey, libraryKey, modelMode, runPipeline])
 
   const insertToWeChat = useCallback(async () => {
     const text = draftRef.current.trim()
@@ -415,33 +511,53 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     }
   }, [bridge, noteOutbound, notify])
 
-  const sendSuggestion = useCallback(async () => {
+  const deliverSend = useCallback(
+    async (text: string, via: 'suggestion' | 'composer') => {
+      if (via === 'suggestion') {
+        const host = window.zhida?.wechat
+        if (host) {
+          const result = await host.sendText(text)
+          if (result.handled) {
+            notify(result.reason)
+            if (!result.ok) return
+          }
+        }
+        noteOutbound(text)
+        setSendState('sent')
+        setWechatSending(true)
+        await bridge.sendText(text)
+        window.setTimeout(() => setWechatSending(false), 600)
+        window.setTimeout(() => setSendState('idle'), 1200)
+        return
+      }
+      setWechatSending(true)
+      await bridge.sendText(text)
+      window.setTimeout(() => setWechatSending(false), 600)
+    },
+    [bridge, noteOutbound, notify],
+  )
+
+  const sendSuggestion = useCallback(() => {
     if (editing) return
     const text = committedRef.current.trim()
     if (!text) return
-    const host = window.zhida?.wechat
-    if (host) {
-      const result = await host.sendText(text)
-      if (result.handled) {
-        notify(result.reason)
-        if (!result.ok) return
-      }
-    }
-    noteOutbound(text)
-    setSendState('sent')
-    setWechatSending(true)
-    await bridge.sendText(text)
-    window.setTimeout(() => setWechatSending(false), 600)
-    window.setTimeout(() => setSendState('idle'), 1200)
-  }, [bridge, editing, noteOutbound, notify])
+    setPendingSend({ text, via: 'suggestion', target: window.zhida?.wechat ? 'wechat' : 'demo' })
+  }, [editing])
 
-  const sendComposer = useCallback(async () => {
+  const sendComposer = useCallback(() => {
     const text = bridge.getSnapshot().composerText.trim()
     if (!text) return
-    setWechatSending(true)
-    await bridge.sendText(text)
-    window.setTimeout(() => setWechatSending(false), 600)
+    setPendingSend({ text, via: 'composer', target: 'demo' })
   }, [bridge])
+
+  const cancelSend = useCallback(() => setPendingSend(null), [])
+
+  const confirmSend = useCallback(() => {
+    const pending = pendingSend
+    setPendingSend(null)
+    if (!pending) return
+    void deliverSend(pending.text, pending.via)
+  }, [deliverSend, pendingSend])
 
   const copySuggestion = useCallback(async () => {
     const text = draftRef.current
@@ -574,6 +690,37 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     setOpenaiBase,
     setOpenaiModel,
     setOpenaiKey,
+    keyStoredSecurely: Boolean(window.zhida?.writeModelKey),
+    knowledgeSource,
+    setKnowledgeSource,
+    folderPath,
+    obsidianPath,
+    setLibraryPath: (value: string) => {
+      if (knowledgeSource === 'obsidian') setObsidianPath(value)
+      else setFolderPath(value)
+    },
+    libraryStatus: describeLibrary({
+      source: knowledgeSource,
+      enabledCount: enabledDocIds.length,
+      phase: libraryPhase,
+      fileCount: libraryFiles.length,
+      code: libraryCode,
+      fallback: knowledgeSource !== 'builtin' && libraryFiles.length === 0,
+    }),
+    chooseLibraryFolder: () => {
+      const pick = window.zhida?.pickLibraryFolder
+      if (!pick || knowledgeSource === 'builtin') return
+      void pick(knowledgeSource).then((folder) => {
+        if (!folder) return
+        if (knowledgeSource === 'obsidian') setObsidianPath(folder)
+        else setFolderPath(folder)
+      })
+    },
+    showDemo,
+    toggleDemo: () => setShowDemo((value) => !value),
+    pendingSend: pendingSend ? { text: pendingSend.text, target: pendingSend.target } : null,
+    cancelSend,
+    confirmSend,
     rerun: () => void runPipeline({ retry: true }),
     setDraft,
     startEdit: () => setEditing(true),

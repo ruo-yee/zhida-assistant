@@ -1,4 +1,5 @@
 import { CORPUS } from '../domain/knowledge/corpus.ts'
+import { normalizeKnowledgeSettings, type KnowledgeSource } from '../domain/knowledge/library.ts'
 import { migratePersonaSettings, type SavedPersona } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
 
@@ -17,6 +18,9 @@ export interface Settings {
   activePersonaId: string
   customPersonas: SavedPersona[]
   enabledDocIds: string[]
+  knowledgeSource: KnowledgeSource
+  folderPath: string
+  obsidianPath: string
   modelMode: ModelMode
   openaiBase: string
   openaiModel: string
@@ -82,6 +86,9 @@ export function defaultSettings(): Settings {
     activePersonaId: 'support',
     customPersonas: [],
     enabledDocIds: CORPUS.map((doc) => doc.id),
+    knowledgeSource: 'builtin',
+    folderPath: '',
+    obsidianPath: '',
     ...model,
   }
 }
@@ -96,6 +103,7 @@ export function loadSettings(): Settings {
       ? parsed.enabledDocIds.filter((id): id is string => typeof id === 'string' && DOC_IDS.has(id))
       : fallback.enabledDocIds
     const personas = migratePersonaSettings(parsed)
+    const library = normalizeKnowledgeSettings(parsed)
     const model = migrateModelSettings(parsed, {
       baseUrl: import.meta.env.VITE_OPENAI_BASE_URL,
       model: import.meta.env.VITE_OPENAI_MODEL,
@@ -107,6 +115,9 @@ export function loadSettings(): Settings {
       activePersonaId: personas.activePersonaId,
       customPersonas: personas.customPersonas,
       enabledDocIds: enabled,
+      knowledgeSource: library.knowledgeSource,
+      folderPath: library.folderPath,
+      obsidianPath: library.obsidianPath,
       ...model,
     }
   } catch {
@@ -116,6 +127,12 @@ export function loadSettings(): Settings {
 
 export function saveSettings(settings: Settings) {
   localStorage.setItem(KEY, JSON.stringify(settings))
+}
+
+/** Desktop builds keep the API key out of localStorage. The web demo has nowhere else to put it. */
+export function persistableSettings(settings: Settings, secureKey: boolean): Settings {
+  if (!secureKey) return settings
+  return { ...settings, openaiKey: '' }
 }
 
 function preferredTheme(): ThemeName {

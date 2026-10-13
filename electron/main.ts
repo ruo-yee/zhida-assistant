@@ -1,11 +1,13 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
 import path from 'node:path'
 import { boundsNearlyEqual, computeDockBounds } from '../src/dock/bounds.ts'
 import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
+import { indexLibraryFolder } from '../src/domain/knowledge/folderIndex.ts'
 import { electronAccessibilityTrusted, promptForAccessibilityOnce } from './accessibility.ts'
 import { findWeChatWindow } from './findWeChat.ts'
+import { readModelKey, writeModelKey } from './modelKey.ts'
 import { openPrivacyPane } from './openPrivacy.ts'
 import { createWeChatHost } from './wechat/host.ts'
 
@@ -218,6 +220,21 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('wechat:get-status', () => wechatStatus)
     ipcMain.handle('wechat:insert', (_event, text: string) => wechatHost.insertText(String(text ?? '')))
     ipcMain.handle('wechat:send', (_event, text: string) => wechatHost.sendText(String(text ?? '')))
+    ipcMain.handle('secret:get-model-key', () => readModelKey())
+    ipcMain.handle('secret:set-model-key', (_event, key: string) => writeModelKey(String(key ?? '')))
+    ipcMain.handle('library:pick', async (event, kind: string) => {
+      const parent = BrowserWindow.fromWebContents(event.sender)
+      const options = {
+        title: kind === 'obsidian' ? '选择 Obsidian 库' : '选择知识文件夹',
+        properties: ['openDirectory'] as Array<'openDirectory'>,
+      }
+      const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+      if (result.canceled) return ''
+      return result.filePaths[0] ?? ''
+    })
+    ipcMain.handle('library:index', (_event, folder: string, kind: string) =>
+      indexLibraryFolder(String(folder ?? ''), kind === 'obsidian' ? 'obsidian' : 'folder'),
+    )
     createWindow()
     void tick()
     void pollWeChat()

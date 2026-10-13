@@ -2,7 +2,7 @@
 
 微信仍然是主聊天窗口。智答助手是贴在它右侧的桌面辅助窗：跟着微信移动和改变大小，检索私有知识库，给出可以改的回复建议。默认不会自动发送。
 
-窗口里左侧的「张明」会话标着「演示窗 · 不是微信官方客户端」，用来演示插入和发送。真正贴住的是系统里的微信窗口，不是这个演示窗。
+桌面版默认收起左侧演示窗。那一栏标着「这是演示数据，不是你的微信」，用来试插入和发送；真正贴住的是系统里的微信窗口。需要对照时，用助手菜单里的「显示演示窗」。
 
 ## 在 Mac 和 Windows 上运行
 
@@ -55,7 +55,7 @@ Mac 包是 `dmg` 和 `zip`，x64 与 arm64。请在 Mac 上执行 `npm run dist:
 
 不要用 ad-hoc（`codesign -s -`）或把 `mac.identity` 设成 `null`。前者每次构建哈希都变，后者会留下 `Identifier=Electron`。两种情况都是：系统设置开关开着，`isTrustedAccessibilityClient` 仍是 false。签好之后 `codesign -dv` 应看到 `Identifier=app.zhida.assistant`，且不是 `Signature=adhoc`。
 
-不要单独打开 Hardened Runtime。Electron 在只有 runtime、没有 JIT entitlement 时会一启动就崩。`build/entitlements.mac.plist` 里已经有 `allow-jit`、`allow-unsigned-executable-memory` 和 `disable-library-validation`。打包配置保持 `hardenedRuntime: false`；以后若要打开 runtime，必须连这份 entitlements 一起签，不能只加 `--options runtime`。
+未签名或 ad-hoc 的包会被 Gatekeeper 拦住，提示无法验证开发者。打开「系统设置 → 隐私与安全性」，点「仍要打开」。用上面的稳定身份签名后，一般不用每次都点。不要单独打开 Hardened Runtime。Electron 在只有 runtime、没有 JIT entitlement 时会一启动就崩。`build/entitlements.mac.plist` 里已经有 `allow-jit`、`allow-unsigned-executable-memory` 和 `disable-library-validation`。打包配置保持 `hardenedRuntime: false`；以后若要打开 runtime，必须连这份 entitlements 一起签，不能只加 `--options runtime`。
 
 指定 Apple Development：
 
@@ -90,7 +90,7 @@ tccutil reset ScreenCapture app.zhida.assistant
 - 用 `NSWorkspace` 找 bundle id `com.tencent.xinWeChat`（以及 `WeChatAppEx`），拿到进程号。
 - 用 CoreGraphics 的 `CGWindowList` 在该进程的屏幕上窗口里，取最大的一层普通窗口（约 240×240 以上）。标题空白也能对上。坐标是左上角原点，和 Electron 的 `setBounds` 一致，不会再按 AppKit 的底边把 Y 翻一次。
 - 窗口列表看不到微信时，用「系统事件」读取窗口位置（例如 `0,111,915,693,微信`，同样是左上角原点）。CoreGraphics 快照解析成功但没有可用窗口时，仍会走这一步，不会提前返回。读到了就贴上，不再把屏幕录制当成必须完成的步骤。菜单里的「重新贴到微信」只是补救。
-- 会话标题同样不依赖 `osascript` 子进程的窗口列表（屏幕录制授权给应用后，子进程经常仍是空的）。列表为空时改读辅助功能的 `AXWindows`，取最大的约 240×240 窗口。贴上了就不会再写「微信在运行，但还读不到窗口」。
+- 会话标题同样不依赖 `osascript` 子进程的窗口列表（屏幕录制授权给应用后，子进程经常仍是空的）。微信 4 上 `AXWindows` 经常是 0；先对应用设置 `AXManualAccessibility`，再读 `AXFocusedWindow` 或 `AXMainWindow`。进程优先认 `com.tencent.xinWeChat`，也认 `com.tencent.flue.WeChatAppEx`。贴上了就不会再写「微信在运行，但还读不到窗口」。
 
 两项权限分开：
 

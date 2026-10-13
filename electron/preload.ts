@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { DockStatus } from '../src/dock/types.ts'
+import type { FolderIndexResult } from '../src/domain/knowledge/indexStatus.ts'
 import type { HostActionResult, HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
 
 contextBridge.exposeInMainWorld('zhida', {
@@ -8,6 +9,11 @@ contextBridge.exposeInMainWorld('zhida', {
   reattach: (): Promise<DockStatus> => ipcRenderer.invoke('dock:reattach'),
   openAccessibilitySettings: (): Promise<boolean> => ipcRenderer.invoke('accessibility:open-settings'),
   openScreenRecordingSettings: (): Promise<boolean> => ipcRenderer.invoke('screen:open-settings'),
+  readModelKey: (): Promise<string> => ipcRenderer.invoke('secret:get-model-key'),
+  writeModelKey: (key: string): Promise<void> => ipcRenderer.invoke('secret:set-model-key', key),
+  pickLibraryFolder: (kind: 'folder' | 'obsidian'): Promise<string> => ipcRenderer.invoke('library:pick', kind),
+  indexLibrary: (folder: string, kind: 'folder' | 'obsidian'): Promise<FolderIndexResult> =>
+    ipcRenderer.invoke('library:index', folder, kind),
   onDockStatus: (callback: (status: DockStatus) => void) => {
     const listener = (_event: IpcRendererEvent, status: DockStatus) => callback(status)
     ipcRenderer.on('dock:status', listener)

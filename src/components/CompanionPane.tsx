@@ -48,6 +48,14 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
       aria-busy={app.phase === 'loading'}
     >
       <DockStatusBar />
+      {!app.showDemo && !app.narrow ? (
+        <p className="demo-note">
+          演示窗已收起。贴住的是系统里的微信，不是演示数据。
+          <button type="button" onClick={app.toggleDemo}>
+            显示演示窗
+          </button>
+        </p>
+      ) : null}
       <header className="pane-header flex items-center gap-2 px-3">
         <div className="brand">
           <Sparkles size={18} />
@@ -76,6 +84,9 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
               </MenuItem>
               {window.zhida ? (
                 <MenuItem onSelect={() => void window.zhida?.reattach()}>重新贴到微信</MenuItem>
+              ) : null}
+              {window.zhida ? (
+                <MenuItem onSelect={app.toggleDemo}>{app.showDemo ? '收起演示窗' : '显示演示窗'}</MenuItem>
               ) : null}
               <MenuSeparator />
               <DemoMenuItems />

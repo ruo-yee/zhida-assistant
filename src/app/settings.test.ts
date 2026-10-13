@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_MODEL_BASE, DEFAULT_MODEL_NAME, SETTINGS_VERSION, migrateModelSettings } from './settings.ts'
+import { DEFAULT_MODEL_BASE, DEFAULT_MODEL_NAME, SETTINGS_VERSION, migrateModelSettings, persistableSettings } from './settings.ts'
 
 describe('migrateModelSettings', () => {
   it('starts new installs on the local model endpoint', () => {
@@ -37,5 +37,25 @@ describe('migrateModelSettings', () => {
         openaiBase: DEFAULT_MODEL_BASE,
       }).modelMode,
     ).toBe('local')
+  })
+
+  it('drops the API key from localStorage when the desktop secret store is available', () => {
+    const settings = {
+      theme: 'light' as const,
+      persona: 'professional' as const,
+      activePersonaId: 'support',
+      customPersonas: [],
+      enabledDocIds: [],
+      knowledgeSource: 'builtin' as const,
+      folderPath: '',
+      obsidianPath: '',
+      modelMode: 'openai' as const,
+      openaiBase: DEFAULT_MODEL_BASE,
+      openaiModel: DEFAULT_MODEL_NAME,
+      openaiKey: 'sk-secret',
+      settingsVersion: SETTINGS_VERSION,
+    }
+    expect(persistableSettings(settings, true).openaiKey).toBe('')
+    expect(persistableSettings(settings, false).openaiKey).toBe('sk-secret')
   })
 })
