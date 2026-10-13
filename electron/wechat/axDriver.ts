@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { electronAccessibilityTrusted } from '../accessibility.ts'
+import { reconcileAxView } from '../../src/dock/hostTrust.ts'
+import { wechatProcessAlive } from './processAlive.ts'
 
 export interface AxView {
   trusted: boolean
@@ -30,15 +32,23 @@ function run(argv) {
   try {
     return JSON.stringify(perform(payload.op || 'inspect', String(payload.text || ''), payload.hostTrusted ? true : false))
   } catch (error) {
-    return JSON.stringify({ ok: false, reason: '辅助功能调用失败' })
+    var hostTrusted = false
+    var running = false
+    try { hostTrusted = payload && payload.hostTrusted ? true : false } catch (inner) { hostTrusted = false }
+    try { running = !!findWeChat() } catch (inner) { running = false }
+    return JSON.stringify({ ok: false, trusted: hostTrusted, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: '辅助功能调用失败' })
   }
 }
 
 function perform(op, text, hostTrusted) {
-  var osTrusted = $.AXIsProcessTrusted() ? true : false
-  var trusted = (osTrusted || hostTrusted) ? true : false
-  var app = findWeChat()
-  if (!trusted) return { ok: false, trusted: false, running: !!app, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'need-ax' }
+  var trusted = hostTrusted ? true : false
+  if (!trusted) {
+    try { trusted = $.AXIsProcessTrusted() ? true : false } catch (error) { trusted = false }
+  }
+  var app = null
+  try { app = findWeChat() } catch (error) { app = null }
+  var running = !!app
+  if (!trusted) return { ok: false, trusted: false, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'need-ax' }
   if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'not-running' }
   var pid = app.processIdentifier
   var root = $.AXUIElementCreateApplication(pid)
@@ -65,12 +75,13 @@ function perform(op, text, hostTrusted) {
 
 function findWeChat() {
   var apps = $.NSWorkspace.sharedWorkspace.runningApplications
-  var names = { '微信': 1, WeChat: 1, Weixin: 1 }
+  var names = { '微信': 1, WeChat: 1, Weixin: 1, WeChatAppEx: 1 }
+  var bundles = { 'com.tencent.xinWeChat': 1, 'com.tencent.xinWeChat.WeChatAppEx': 1 }
   for (var i = 0; i < apps.count; i++) {
     var app = apps.objectAtIndex(i)
     var bid = String(app.bundleIdentifier || '')
     var name = String(app.localizedName || '')
-    if (bid === 'com.tencent.xinWeChat' || names[name]) return app
+    if (bundles[bid] || names[name]) return app
   }
   return null
 }
@@ -253,21 +264,30 @@ async function scriptFile() {
 }
 
 export async function runAx(op: 'inspect' | 'set' | 'clear' | 'return', text = ''): Promise<AxView> {
+  const hostTrusted = electronAccessibilityTrusted()
   const dir = await mkdtemp(path.join(tmpdir(), 'zhida-ax-payload-'))
   const payloadPath = path.join(dir, 'payload.json')
   try {
     await writeFile(
       payloadPath,
-      JSON.stringify({ op, text, hostTrusted: electronAccessibilityTrusted() }),
+      JSON.stringify({ op, text, hostTrusted }),
       { encoding: 'utf8', mode: 0o600 },
     )
     const result = await runOsascript(await scriptFile(), payloadPath)
     const parsed = parseAx(result.stdout)
-    if (parsed) return parsed
-    if (/ENOENT|not found/i.test(result.stderr)) {
-      return emptyView('辅助功能接口不存在')
+    const failed = !parsed || parsed.reason === '辅助功能调用失败' || parsed.reason === '辅助功能接口不存在' || !parsed.running
+    const workspaceRunning = failed ? await wechatProcessAlive() : null
+    const view = parsed ?? {
+      trusted: false,
+      running: false,
+      hasWindow: false,
+      windowId: '',
+      title: '',
+      hasTextArea: false,
+      composer: null,
+      reason: /ENOENT|not found/i.test(result.stderr) ? '辅助功能接口不存在' : '辅助功能调用失败',
     }
-    return emptyView('辅助功能调用失败')
+    return reconcileAxView(view, hostTrusted, workspaceRunning)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -290,18 +310,5 @@ function parseAx(stdout: string): AxView | null {
     }
   } catch {
     return null
-  }
-}
-
-function emptyView(reason: string): AxView {
-  return {
-    trusted: false,
-    running: false,
-    hasWindow: false,
-    windowId: '',
-    title: '',
-    hasTextArea: false,
-    composer: null,
-    reason,
   }
 }

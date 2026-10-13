@@ -163,10 +163,10 @@ export class MacWeChatHost {
 
   private statusFrom(view: AxView): HostBridgeStatus {
     let detail = '正在检查微信…'
-    if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
-    else if (!view.trusted) detail = needAccessibilityReason(accessibilityClientName(app.isPackaged))
-    else if (!view.hasWindow) detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
-    else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = view.reason
+    if (!view.trusted) detail = needAccessibilityReason(accessibilityClientName(app.isPackaged))
+    else if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
+    else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = '微信在运行，但还读不到窗口。'
+    else if (!view.hasWindow || view.reason === 'no-window') detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
     else detail = usableTitle(view.title) ? `已识别微信会话「${usableTitle(view.title)}」。` : '已连接微信，但没有读到当前会话标题。'
     return {
       platform: 'darwin',
@@ -174,7 +174,7 @@ export class MacWeChatHost {
       axTrusted: view.trusted,
       wechatRunning: view.running,
       dbReady: false,
-      needsAccessibility: !view.trusted && view.running && view.reason === 'need-ax',
+      needsAccessibility: !view.trusted,
       detail,
       session: null,
     }

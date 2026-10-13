@@ -82,6 +82,19 @@ describe('selectWeChatWindow', () => {
     ).toBe('not-running')
   })
 
+  it('asks for screen recording without an Accessibility prompt when the app is already trusted', () => {
+    const found = selectWeChatWindow(
+      snapshot({
+        pids: [10],
+        selfPid: 9,
+        axTrusted: true,
+        windows: [win({ pid: 9, width: 440, height: 780, owner: '智答助手' })],
+      }),
+    )
+    expect(found.reason).toBe('screen-recording')
+    expect(found.needsAccessibility).toBe(false)
+  })
+
   it('asks for screen recording when WeChat is running but no other windows are visible', () => {
     const found = selectWeChatWindow(
       snapshot({

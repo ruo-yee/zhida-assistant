@@ -107,11 +107,14 @@ function hasDockable(pids, nameSet, windows) {
   return false;
 }
 function probeAx(pids, hostTrusted) {
-  if (!pids.length) return { trusted: null, bounds: null };
-  try { ObjC.import('ApplicationServices'); } catch (error) { return { trusted: false, bounds: null }; }
-  var osTrusted = false;
-  try { osTrusted = $.AXIsProcessTrusted() ? true : false; } catch (error) { return { trusted: false, bounds: null }; }
-  var trusted = (osTrusted || hostTrusted) ? true : false;
+  if (!pids.length) return { trusted: hostTrusted ? true : null, bounds: null };
+  var trusted = hostTrusted ? true : false;
+  if (!trusted) {
+    try { ObjC.import('ApplicationServices'); } catch (error) { return { trusted: false, bounds: null }; }
+    try { trusted = $.AXIsProcessTrusted() ? true : false; } catch (error) { trusted = false; }
+  } else {
+    try { ObjC.import('ApplicationServices'); } catch (error) { return { trusted: true, bounds: null }; }
+  }
   if (!trusted) return { trusted: false, bounds: null };
   var best = null;
   for (var i = 0; i < pids.length; i++) {

@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
 import { electronBoundsFromQuartz, parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
-import { isAssistivePermissionError, parseBoundsReport } from '../src/dock/parse.ts'
+import { dockWhenWindowLookupFails } from '../src/dock/hostTrust.ts'
+import { parseBoundsReport } from '../src/dock/parse.ts'
 import type { FindOutcome } from '../src/dock/types.ts'
 import { electronAccessibilityTrusted } from './accessibility.ts'
 import { DARWIN_APPLESCRIPT, WIN32_POWERSHELL } from './hostScripts.ts'
 import { runCommand } from './runCommand.ts'
+import { wechatProcessAlive } from './wechat/processAlive.ts'
 
 export async function findWeChatWindow(platform = process.platform): Promise<FindOutcome> {
   if (platform === 'darwin') return findDarwin()
@@ -32,15 +34,17 @@ async function findDarwin(): Promise<FindOutcome> {
   const snapshot = parseWeChatSnapshot(listed.stdout)
   if (snapshot) return selectWeChatWindow(snapshot)
 
+  const hostTrusted = electronAccessibilityTrusted()
   const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
   const fromAx = parseBoundsReport(ax.stdout)
   if (fromAx) return { bounds: electronBoundsFromQuartz(fromAx), reason: 'ok' }
 
-  if (isAssistivePermissionError(`${listed.stderr}\n${ax.stderr}`)) {
-    return { bounds: null, reason: 'permission', needsAccessibility: true }
-  }
-  if (/ENOENT/i.test(`${listed.stderr} ${ax.stderr}`)) return { bounds: null, reason: 'error' }
-  return { bounds: null, reason: 'error' }
+  const blob = `${listed.stderr}\n${ax.stderr}`
+  return dockWhenWindowLookupFails({
+    hostTrusted,
+    wechatRunning: await wechatProcessAlive(),
+    commandMissing: /ENOENT/i.test(blob),
+  })
 }
 
 async function findWin32(): Promise<FindOutcome> {
