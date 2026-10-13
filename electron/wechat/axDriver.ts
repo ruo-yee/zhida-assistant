@@ -51,9 +51,11 @@ function perform(op, text, hostTrusted) {
   var running = !!app
   if (!trusted) return { ok: false, trusted: false, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'need-ax' }
   if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'not-running' }
-  var pid = app.processIdentifier
+  var pid = 0
+  try { pid = Number(ObjC.unwrap(app.processIdentifier)) } catch (error) { pid = Number(app.processIdentifier) }
   var root = $.AXUIElementCreateApplication(pid)
   $.AXUIElementSetMessagingTimeout(root, 0.5)
+  try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true) } catch (error) {}
   var located = mainWindow(pid, root)
   if (!located) return { ok: false, trusted: true, running: true, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'no-window' }
   var box = findInput(located.window)
@@ -74,17 +76,34 @@ function perform(op, text, hostTrusted) {
   return { ok: true, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: !!box, composer: composer, reason: '' }
 }
 
+function nsText(value) {
+  if (value === null || value === undefined) return ''
+  try {
+    var text = ObjC.unwrap(value)
+    return typeof text === 'string' ? text : String(text || '')
+  } catch (error) {
+    return String(value || '')
+  }
+}
+
 function findWeChat() {
   var apps = $.NSWorkspace.sharedWorkspace.runningApplications
   var names = { '微信': 1, WeChat: 1, Weixin: 1, WeChatAppEx: 1 }
-  var bundles = { 'com.tencent.xinWeChat': 1, 'com.tencent.xinWeChat.WeChatAppEx': 1 }
+  var bundles = {
+    'com.tencent.xinWeChat': 1,
+    'com.tencent.xinWeChat.WeChatAppEx': 1,
+    'com.tencent.flue.WeChatAppEx': 1
+  }
+  var preferred = null
+  var fallback = null
   for (var i = 0; i < apps.count; i++) {
     var app = apps.objectAtIndex(i)
-    var bid = String(app.bundleIdentifier || '')
-    var name = String(app.localizedName || '')
-    if (bundles[bid] || names[name]) return app
+    var bid = nsText(app.bundleIdentifier)
+    var name = nsText(app.localizedName)
+    if (bid === 'com.tencent.xinWeChat') preferred = app
+    else if (!fallback && (bundles[bid] || names[name])) fallback = app
   }
-  return null
+  return preferred || fallback
 }
 
 function copyAttr(el, name) {
@@ -155,22 +174,23 @@ function findInput(window) {
 
 function mainWindow(pid, root) {
   var windows = asWindows(root)
-  if (!windows.length) windows = childrenOf(root)
   var cg = cgOwnedWindow(pid)
-  if (cg) {
+  if (cg && windows.length) {
     var matched = windows[0] || null
     for (var n = 0; n < windows.length; n++) {
       var title = axString(copyAttr(windows[n], 'AXTitle')) || ''
       if (title && title === cg.name) matched = windows[n]
     }
     if (matched) return { window: matched, id: cg.id, cgName: cg.name }
-    return { window: null, id: cg.id, cgName: cg.name }
   }
-  // Screen Recording granted to the app is not inherited by this osascript
-  // child, so CGWindowList is often empty. AXWindows still sees WeChat.
-  var ax = largestAxWindow(windows)
-  if (!ax) return null
-  return { window: ax.window, id: cg ? cg.id : 'ax', cgName: (cg && cg.name) || ax.title }
+  var ax = windows.length ? largestAxWindow(windows) : null
+  if (ax) return { window: ax.window, id: cg ? cg.id : 'ax', cgName: (cg && cg.name) || ax.title }
+  // WeChat 4: CGWindowList is empty for osascript, and AXWindows count is 0.
+  // AXFocusedWindow or AXMainWindow still exists after AXManualAccessibility.
+  var focused = copyAttr(root, 'AXFocusedWindow') || copyAttr(root, 'AXMainWindow')
+  if (!focused) return null
+  var focusedTitle = axString(copyAttr(focused, 'AXTitle')) || ''
+  return { window: focused, id: cg ? cg.id : 'ax-focus', cgName: (cg && cg.name) || focusedTitle }
 }
 
 function cgOwnedWindow(pid) {

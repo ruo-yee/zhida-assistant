@@ -1,7 +1,7 @@
 import type { FindOutcome, HostWindow } from './types.ts'
 
 /** Main WeChat bundle. Helpers that own the real window use the second id. */
-export const WECHAT_BUNDLE_IDS = ['com.tencent.xinWeChat', 'com.tencent.xinWeChat.WeChatAppEx'] as const
+export const WECHAT_BUNDLE_IDS = ['com.tencent.xinWeChat', 'com.tencent.xinWeChat.WeChatAppEx', 'com.tencent.flue.WeChatAppEx'] as const
 
 /**
  * Exact owner names only. Substring checks also match 微信读书 and 微信输入法.

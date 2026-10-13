@@ -16,9 +16,25 @@ describe('WeChat session reader when CoreGraphics is empty', () => {
     expect(pick).toContain('axSize')
   })
 
+  it('enables manual accessibility and uses the focused window when the window list is empty', () => {
+    expect(source).toContain('ObjC.unwrap(value)')
+    expect(source).toContain("bid === 'com.tencent.xinWeChat'")
+    expect(source).toContain('com.tencent.flue.WeChatAppEx')
+    expect(source).toContain("$('AXManualAccessibility')")
+    const main = source.slice(source.indexOf('function mainWindow'), source.indexOf('function cgOwnedWindow'))
+    expect(main.indexOf('largestAxWindow(windows)')).toBeLessThan(main.indexOf("'AXFocusedWindow'"))
+    expect(main).toContain('AXMainWindow')
+  })
+
   it('still trusts the Electron host and reconciles a failed Accessibility call', () => {
     expect(source).toContain('electronAccessibilityTrusted')
     expect(source).toContain('reconcileAxView(view, hostTrusted, workspaceRunning)')
     expect(source).toContain('hostTrusted')
+  })
+
+  it('still docks from System Events when the window-list snapshot has no bounds', () => {
+    const finder = readFileSync('electron/findWeChat.ts', 'utf8')
+    expect(finder).toContain('if (picked.bounds) return picked')
+    expect(finder).toContain('DARWIN_APPLESCRIPT')
   })
 })
