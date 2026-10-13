@@ -21,6 +21,7 @@ const SCRIPT = `
 function run(argv) {
   ObjC.import('ApplicationServices')
   ObjC.import('Cocoa')
+  ObjC.import('CoreGraphics')
   var payload = { op: 'inspect', text: '', hostTrusted: false }
   try {
     if (argv[0]) {
@@ -153,28 +154,64 @@ function findInput(window) {
 }
 
 function mainWindow(pid, root) {
-  var infos = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID)
-  var list = ObjC.deepUnwrap(infos) || []
-  var best = null
-  for (var i = 0; i < list.length; i++) {
-    var item = list[i]
-    if (!item || item.kCGWindowLayer !== 0) continue
-    if (item.kCGWindowOwnerPID !== pid) continue
-    var bounds = item.kCGWindowBounds || {}
-    var area = Number(bounds.Width || 0) * Number(bounds.Height || 0)
-    if (area < 240 * 240) continue
-    if (!best || area > best.area) {
-      best = { id: String(item.kCGWindowNumber || ''), name: String(item.kCGWindowName || ''), area: area, bounds: bounds }
+  var windows = asWindows(root)
+  if (!windows.length) windows = childrenOf(root)
+  var cg = cgOwnedWindow(pid)
+  if (cg) {
+    var matched = windows[0] || null
+    for (var n = 0; n < windows.length; n++) {
+      var title = axString(copyAttr(windows[n], 'AXTitle')) || ''
+      if (title && title === cg.name) matched = windows[n]
     }
+    if (matched) return { window: matched, id: cg.id, cgName: cg.name }
+    return { window: null, id: cg.id, cgName: cg.name }
+  }
+  // Screen Recording granted to the app is not inherited by this osascript
+  // child, so CGWindowList is often empty. AXWindows still sees WeChat.
+  var ax = largestAxWindow(windows)
+  if (!ax) return null
+  return { window: ax.window, id: cg ? cg.id : 'ax', cgName: (cg && cg.name) || ax.title }
+}
+
+function cgOwnedWindow(pid) {
+  try {
+    var infos = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID)
+    var list = []
+    try { list = ObjC.deepUnwrap(infos) || [] } catch (error) { list = [] }
+    if (!list || typeof list.length !== 'number') return null
+    var best = null
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      if (!item || item.kCGWindowLayer !== 0) continue
+      if (item.kCGWindowOwnerPID !== pid) continue
+      var bounds = item.kCGWindowBounds || {}
+      var area = Number(bounds.Width || 0) * Number(bounds.Height || 0)
+      if (area < 240 * 240) continue
+      if (!best || area > best.area) {
+        best = { id: String(item.kCGWindowNumber || ''), name: String(item.kCGWindowName || ''), area: area }
+      }
+    }
+    return best
+  } catch (error) {
+    return null
+  }
+}
+
+function largestAxWindow(windows) {
+  var best = null
+  var bestArea = 0
+  var bestTitle = ''
+  for (var i = 0; i < windows.length; i++) {
+    var size = axSize(windows[i])
+    if (!size || size.w < 240 || size.h < 240) continue
+    var area = size.w * size.h
+    if (area <= bestArea) continue
+    best = windows[i]
+    bestArea = area
+    bestTitle = axString(copyAttr(windows[i], 'AXTitle')) || ''
   }
   if (!best) return null
-  var windows = childrenOf(root).length ? childrenOf(root) : asWindows(root)
-  var window = windows[0] || null
-  for (var n = 0; n < windows.length; n++) {
-    var title = axString(copyAttr(windows[n], 'AXTitle')) || ''
-    if (title && title === best.name) window = windows[n]
-  }
-  return { window: window, id: best.id, cgName: best.name }
+  return { window: best, title: bestTitle }
 }
 
 function asWindows(root) {

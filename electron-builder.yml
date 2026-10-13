@@ -18,6 +18,9 @@ artifactName: zhida-assistant-${version}-${os}-${arch}.${ext}
 afterSign: scripts/macStableSign.cjs
 mac:
   category: public.app-category.productivity
+  # Hardened Runtime alone crashes Electron (JIT). Keep it off. The entitlements
+  # plist already has allow-jit, unsigned executable memory, and
+  # disable-library-validation, so a later runtime signature must use that file.
   hardenedRuntime: false
   gatekeeperAssess: false
   target:

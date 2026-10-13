@@ -33,8 +33,14 @@ async function findDarwin(): Promise<FindOutcome> {
     4000,
   )
   const snapshot = parseWeChatSnapshot(listed.stdout)
-  const fromList = snapshot ? selectWeChatWindow(snapshot) : null
-  if (fromList?.reason === 'ok' && fromList.bounds) return fromList
+  let fromList: FindOutcome | null = null
+  if (snapshot) {
+    const picked = selectWeChatWindow(snapshot)
+    // CG empty and the AXUIElement probe missed: do not return that outcome.
+    // System Events still has the window (live bounds 0,111,915,693).
+    if (picked.bounds) return picked
+    fromList = picked
+  }
 
   const hostTrusted = electronAccessibilityTrusted()
   const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 4000)

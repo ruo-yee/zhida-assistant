@@ -55,6 +55,8 @@ Mac 包是 `dmg` 和 `zip`，x64 与 arm64。请在 Mac 上执行 `npm run dist:
 
 不要用 ad-hoc（`codesign -s -`）或把 `mac.identity` 设成 `null`。前者每次构建哈希都变，后者会留下 `Identifier=Electron`。两种情况都是：系统设置开关开着，`isTrustedAccessibilityClient` 仍是 false。签好之后 `codesign -dv` 应看到 `Identifier=app.zhida.assistant`，且不是 `Signature=adhoc`。
 
+不要单独打开 Hardened Runtime。Electron 在只有 runtime、没有 JIT entitlement 时会一启动就崩。`build/entitlements.mac.plist` 里已经有 `allow-jit`、`allow-unsigned-executable-memory` 和 `disable-library-validation`。打包配置保持 `hardenedRuntime: false`；以后若要打开 runtime，必须连这份 entitlements 一起签，不能只加 `--options runtime`。
+
 指定 Apple Development：
 
 ```bash
@@ -87,7 +89,8 @@ tccutil reset ScreenCapture app.zhida.assistant
 
 - 用 `NSWorkspace` 找 bundle id `com.tencent.xinWeChat`（以及 `WeChatAppEx`），拿到进程号。
 - 用 CoreGraphics 的 `CGWindowList` 在该进程的屏幕上窗口里，取最大的一层普通窗口（约 240×240 以上）。标题空白也能对上。坐标是左上角原点，和 Electron 的 `setBounds` 一致，不会再按 AppKit 的底边把 Y 翻一次。
-- 窗口列表看不到微信时，用「系统事件」读取窗口位置（例如 `0,111,915,693,微信`，同样是左上角原点）。读到了就贴上，不再把屏幕录制当成必须完成的步骤。菜单里的「重新贴到微信」只是补救。
+- 窗口列表看不到微信时，用「系统事件」读取窗口位置（例如 `0,111,915,693,微信`，同样是左上角原点）。CoreGraphics 快照解析成功但没有可用窗口时，仍会走这一步，不会提前返回。读到了就贴上，不再把屏幕录制当成必须完成的步骤。菜单里的「重新贴到微信」只是补救。
+- 会话标题同样不依赖 `osascript` 子进程的窗口列表（屏幕录制授权给应用后，子进程经常仍是空的）。列表为空时改读辅助功能的 `AXWindows`，取最大的约 240×240 窗口。贴上了就不会再写「微信在运行，但还读不到窗口」。
 
 两项权限分开：
 
@@ -112,7 +115,7 @@ tccutil reset ScreenCapture app.zhida.assistant
 
 三条回复默认交给本机或你填写的 OpenAI 兼容接口来写。打开助手菜单里的「设置」，第一页就是「大模型」：填写接口地址、API Key 和模型名。这三项改完即保存在这台电脑上，不写进仓库，也不会上传。本机 Ollama 的 API Key 可以留空。人设和语气写进人设说明。
 
-模型提示里的**上下文**是当前微信会话最近 12 条消息（对方和自己），不是知识库。检索到相关文档时，知识摘录会另附在提示里，只作补充。模型连不上时，回复区改用本地草稿，并写明「模型不可用，已改用本地草稿」，同时可以点「配置大模型」回到这一页。要停用模型，在这一页关掉「用大模型写回复」。
+模型提示里的**上下文**是当前微信会话最近 12 条消息（对方和自己），不是知识库。在应用里插入或发送之后，下一次生成会把这句话按当时的位置算进去，和新来的微信消息放在一起；微信记录里已经有同样的话时不再重复加。检索到相关文档时，知识摘录会另附在提示里，只作补充。模型连不上时，回复区改用本地草稿，并写明「模型不可用，已改用本地草稿」，同时可以点「配置大模型」回到这一页。要停用模型，在这一页关掉「用大模型写回复」。
 
 `.env.local` 只给第一次打开提供默认值。之后以设置页里保存的地址为准。
 
