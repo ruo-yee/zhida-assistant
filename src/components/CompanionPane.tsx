@@ -63,9 +63,9 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           ) : null}
         </div>
         {app.phase === 'loading' ? <SkeletonState /> : null}
-        {app.phase === 'empty' ? <EmptyState /> : null}
         {app.phase === 'error' ? <ErrorState /> : null}
-        {app.phase === 'ready' ? (
+        {app.phase === 'ready' && app.hits.length === 0 ? <EmptyState /> : null}
+        {app.phase === 'ready' && app.hits.length > 0 ? (
           <div className="card-list fade-in">
             {app.hits.map((hit) => (
               <KnowledgeCard
@@ -86,6 +86,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           {app.phase === 'ready' && app.variantCount > 0 ? (
             <span className="meta">
               {app.provider === 'openai' ? '模型 · ' : ''}
+              {app.replyMode === 'chat' ? '人设草稿 · ' : '依据摘录 · '}
               {app.variantIndex + 1} / {app.variantCount}
             </span>
           ) : null}
@@ -93,6 +94,24 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
         {app.phase === 'loading' ? <ReplySkeleton /> : null}
         {app.phase === 'ready' ? (
           <div className="reply-wrap fade-in">
+            {app.variants.length > 0 ? (
+              <div className="candidates" role="radiogroup" aria-label="回复候选">
+                <p className="candidate-hint">点一条候选，或在下面改完再插入。发送仍要再点一次。</p>
+                {app.variants.map((text, index) => (
+                  <button
+                    key={`${index}-${text.slice(0, 24)}`}
+                    type="button"
+                    role="radio"
+                    aria-checked={app.variantIndex === index}
+                    className={app.variantIndex === index ? 'candidate is-on' : 'candidate'}
+                    onClick={() => app.selectVariant(index)}
+                  >
+                    <span className="candidate-n">{index + 1}</span>
+                    <span className="candidate-text">{text}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <ReplyCard
               text={app.draft}
               editing={app.editing}
@@ -105,9 +124,9 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
             {app.warning ? <p className="warn">{app.warning}</p> : null}
           </div>
         ) : null}
-        {app.phase === 'empty' || app.phase === 'error' ? (
+        {app.phase === 'error' ? (
           <div className="reply-wrap">
-            <p className="quiet">{app.phase === 'error' ? '检索失败时不生成回复。' : '没有可引用的知识，暂不生成回复。'}</p>
+            <p className="quiet">检索失败时不生成回复。</p>
           </div>
         ) : null}
       </div>

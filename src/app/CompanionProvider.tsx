@@ -11,7 +11,9 @@ import {
 import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
-import { createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
+import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
+import { personaPrompt, type PersonaRole } from '../domain/reply/personas.ts'
+import type { ReplyGrounding } from '../domain/reply/ReplyGenerator.ts'
 import type { IntentLabel, KnowledgeHit, Persona } from '../domain/types.ts'
 import { MockWeChatBridge, type DraftEcho } from '../domain/wechat/MockWeChatBridge.ts'
 import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
@@ -38,6 +40,8 @@ interface CompanionContextValue {
   barEpoch: number
   errorEpoch: number
   variantIndex: number
+  variants: string[]
+  replyMode: ReplyGrounding
   variantCount: number
   regen: boolean
   sendState: 'idle' | 'sent'
@@ -57,6 +61,10 @@ interface CompanionContextValue {
   toggleTheme: () => void
   persona: Persona
   setPersona: (persona: Persona) => void
+  personaRole: PersonaRole
+  setPersonaRole: (role: PersonaRole) => void
+  customPersona: string
+  setCustomPersona: (value: string) => void
   docs: Array<{ id: string; title: string; version: string; enabled: boolean }>
   toggleDoc: (id: string) => void
   modelMode: ModelMode
@@ -75,6 +83,7 @@ interface CompanionContextValue {
   insertToWeChat: () => void
   sendSuggestion: () => void
   regenerate: () => void
+  selectVariant: (index: number) => void
   copySuggestion: () => void
   setComposerText: (value: string) => void
   sendComposer: () => void
@@ -119,12 +128,15 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [wechatSending, setWechatSending] = useState(false)
   const [warning, setWarning] = useState<string | null>(null)
   const [provider, setProvider] = useState<'mock' | 'openai'>('mock')
+  const [replyMode, setReplyMode] = useState<ReplyGrounding>('grounded')
   const [emptyReason, setEmptyReason] = useState<EmptyReason>('nomatch')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [theme, setTheme] = useState(boot.theme)
   const [persona, setPersona] = useState(boot.persona)
+  const [personaRole, setPersonaRole] = useState(boot.personaRole)
+  const [customPersona, setCustomPersona] = useState(boot.customPersona)
   const [enabledDocIds, setEnabledDocIds] = useState(boot.enabledDocIds)
   const [modelMode, setModelMode] = useState(boot.modelMode)
   const [openaiBase, setOpenaiBase] = useState(boot.openaiBase)
@@ -137,7 +149,16 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 860px)').matches)
   const [sessionEpoch, setSessionEpoch] = useState(0)
 
-  const settingsRef = useRef({ persona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey })
+  const settingsRef = useRef({
+    persona,
+    personaRole,
+    customPersona,
+    enabledDocIds,
+    modelMode,
+    openaiBase,
+    openaiModel,
+    openaiKey,
+  })
   const draftRef = useRef(draft)
   const committedRef = useRef(committed)
   const variantsRef = useRef(variants)
@@ -162,12 +183,21 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   )
 
   useEffect(() => {
-    settingsRef.current = { persona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey }
+    settingsRef.current = {
+      persona,
+      personaRole,
+      customPersona,
+      enabledDocIds,
+      modelMode,
+      openaiBase,
+      openaiModel,
+      openaiKey,
+    }
     draftRef.current = draft
     committedRef.current = committed
     variantsRef.current = variants
     indexRef.current = variantIndex
-  }, [persona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, draft, committed, variants, variantIndex])
+  }, [persona, personaRole, customPersona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, draft, committed, variants, variantIndex])
 
   const notify = useCallback((text: string) => {
     setToast(text)
@@ -220,9 +250,19 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   }, [latestCustomer])
 
   useEffect(() => {
-    saveSettings({ theme, persona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey })
+    saveSettings({
+      theme,
+      persona,
+      personaRole,
+      customPersona,
+      enabledDocIds,
+      modelMode,
+      openaiBase,
+      openaiModel,
+      openaiKey,
+    })
     document.documentElement.dataset.theme = theme
-  }, [theme, persona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
+  }, [theme, persona, personaRole, customPersona, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey])
 
   const runPipeline = useCallback(
     async (opts?: { retry?: boolean; fail?: boolean }) => {
@@ -250,39 +290,35 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           throw new Error('retrieval failed')
         }
         const enabled = settingsRef.current.enabledDocIds
-        if (enabled.length === 0) {
-          await wait()
-          if (token !== tokenRef.current) return
-          clearReply('disabled')
-          return
-        }
         const found = await retrieverRef.current.search({
           messages: customer.slice(-4).map((message) => ({ role: message.role, text: message.text })),
           enabledDocIds: enabled,
         })
         if (token !== tokenRef.current) return
-        if (found.length === 0) {
-          await wait()
-          if (token !== tokenRef.current) return
-          clearReply('nomatch')
-          return
-        }
+        const intentNow = classifyIntent(latest)
+        const grounding = groundingFor(intentNow, enabled.length === 0 ? [] : found)
+        const visibleHits = grounding === 'grounded' ? found : []
         const batch = await generatorRef.current.generate({
           persona: settingsRef.current.persona,
-          intent: classifyIntent(latest),
+          role: settingsRef.current.personaRole,
+          personaText: personaPrompt(settingsRef.current.personaRole, settingsRef.current.customPersona),
+          intent: intentNow,
           customerText: latest,
-          hits: found,
+          grounding,
+          hits: visibleHits,
         })
         await wait()
         if (token !== tokenRef.current) return
         const first = batch.variants[0] ?? ''
-        setHits(found)
+        setHits(visibleHits)
         setVariants(batch.variants)
         setVariantIndex(0)
         setDraft(first)
         setCommitted(first)
         setWarning(batch.warning ?? null)
         setProvider(batch.provider)
+        setReplyMode(batch.grounding)
+        setEmptyReason(enabled.length === 0 ? 'disabled' : 'nomatch')
         setPhase('ready')
         setBarEpoch((value) => value + 1)
         setExpandedId(null)
@@ -295,19 +331,6 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         setCommitted('')
         setPhase('error')
         setErrorEpoch((value) => value + 1)
-      }
-
-      function clearReply(reason: EmptyReason) {
-        setHits([])
-        setVariants([])
-        setVariantIndex(0)
-        setDraft('')
-        setCommitted('')
-        setWarning(null)
-        setProvider('mock')
-        setEmptyReason(reason)
-        setPhase('empty')
-        setExpandedId(null)
       }
     },
     [bridge],
@@ -327,7 +350,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => {
       tokenRef.current += 1
     }
-  }, [lastCustomerId, sessionEpoch, persona, enabledKey, modelMode, runPipeline])
+  }, [lastCustomerId, sessionEpoch, persona, personaRole, enabledKey, modelMode, runPipeline])
 
   const insertToWeChat = useCallback(async () => {
     const text = draftRef.current.trim()
@@ -399,6 +422,15 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setCopyState('idle'), 1000)
   }, [notify])
 
+  const selectVariant = useCallback((index: number) => {
+    const text = variantsRef.current[index]
+    if (!text) return
+    setVariantIndex(index)
+    setDraft(text)
+    setCommitted(text)
+    setEditing(false)
+  }, [])
+
   const regenerate = useCallback(async () => {
     const list = variantsRef.current
     if (editing || phase !== 'ready' || list.length === 0 || regen) return
@@ -431,6 +463,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     barEpoch,
     errorEpoch,
     variantIndex,
+    variants,
+    replyMode,
     variantCount: variants.length,
     regen,
     sendState,
@@ -450,6 +484,10 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     toggleTheme: () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
     persona,
     setPersona,
+    personaRole,
+    setPersonaRole,
+    customPersona,
+    setCustomPersona,
     docs: CORPUS.map((doc) => ({
       id: doc.id,
       title: doc.title,
@@ -480,6 +518,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     insertToWeChat: () => void insertToWeChat(),
     sendSuggestion: () => void sendSuggestion(),
     regenerate: () => void regenerate(),
+    selectVariant,
     copySuggestion: () => void copySuggestion(),
     setComposerText: (text) => bridge.setComposerText(text),
     sendComposer: () => void sendComposer(),

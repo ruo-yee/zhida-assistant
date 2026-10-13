@@ -13,4 +13,11 @@ describe('classifyIntent', () => {
     expect(classifyIntent('这个功能多少钱，怎么开通')).toBe('购买')
     expect(classifyIntent('我要投诉，等太久了')).toBe('投诉')
   })
+
+  it('treats small talk and unanswered questions as 闲聊 or 询问', () => {
+    expect(classifyIntent('今天天气怎么样，适合出门吗？')).toBe('闲聊')
+    expect(classifyIntent('你好')).toBe('闲聊')
+    expect(classifyIntent('')).toBe('闲聊')
+    expect(classifyIntent('怎么导出报表？')).toBe('询问')
+  })
 })

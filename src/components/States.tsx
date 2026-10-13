@@ -46,6 +46,7 @@ export function EmptyState() {
       <div className="empty">
         <EmptyArt />
         <p>知识库里的文档都关掉了。</p>
+        <p className="empty-breathe">下面仍按当前人设起草了回复</p>
         <button type="button" className="linkish" onClick={() => app.setSettingsOpen(true)}>
           去设置里打开一份文档
         </button>
@@ -56,7 +57,7 @@ export function EmptyState() {
     <div className="empty">
       <EmptyArt />
       <p>没有匹配的知识条目</p>
-      <p className="empty-breathe">换个问法试试</p>
+      <p className="empty-breathe">{app.replyMode === 'chat' ? '已按当前人设起草回复' : '换个问法试试'}</p>
     </div>
   )
 }

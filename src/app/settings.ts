@@ -1,4 +1,5 @@
 import { CORPUS } from '../domain/knowledge/corpus.ts'
+import { isPersonaRole, type PersonaRole } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
 
 export type ThemeName = 'light' | 'dark'
@@ -7,6 +8,8 @@ export type ModelMode = 'local' | 'openai'
 export interface Settings {
   theme: ThemeName
   persona: Persona
+  personaRole: PersonaRole
+  customPersona: string
   enabledDocIds: string[]
   modelMode: ModelMode
   openaiBase: string
@@ -23,6 +26,8 @@ export function defaultSettings(): Settings {
   return {
     theme: preferredTheme(),
     persona: 'professional',
+    personaRole: 'support',
+    customPersona: '',
     enabledDocIds: CORPUS.map((doc) => doc.id),
     modelMode: 'local',
     openaiBase: import.meta.env.VITE_OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
@@ -43,6 +48,8 @@ export function loadSettings(): Settings {
     return {
       theme: parsed.theme === 'dark' || parsed.theme === 'light' ? parsed.theme : fallback.theme,
       persona: PERSONAS.includes(parsed.persona as Persona) ? (parsed.persona as Persona) : fallback.persona,
+      personaRole: isPersonaRole(parsed.personaRole) ? parsed.personaRole : fallback.personaRole,
+      customPersona: typeof parsed.customPersona === 'string' ? parsed.customPersona.slice(0, 2000) : fallback.customPersona,
       enabledDocIds: enabled,
       modelMode: parsed.modelMode === 'openai' ? 'openai' : 'local',
       openaiBase: typeof parsed.openaiBase === 'string' && parsed.openaiBase.trim() ? parsed.openaiBase : fallback.openaiBase,
