@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron'
 import path from 'node:path'
 import { boundsNearlyEqual, computeDockBounds } from '../src/dock/bounds.ts'
+import { followWeChatVisibility } from '../src/dock/followWeChat.ts'
 import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
-import { indexLibraryFolder } from '../src/domain/knowledge/folderIndex.ts'
+import { classifyDroppedPath, indexLibraryFolder } from '../src/domain/knowledge/folderIndex.ts'
 import { electronAccessibilityTrusted, promptForAccessibilityOnce } from './accessibility.ts'
 import { findWeChatWindow } from './findWeChat.ts'
 import { readModelKey, writeModelKey } from './modelKey.ts'
@@ -26,6 +27,7 @@ let moveLocks = 0
 let pausedUntil = 0
 let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
+let seenWeChat = false
 const accessibilityName = process.platform === 'darwin' ? (app.isPackaged ? '智答助手' : 'Electron') : ''
 let status: DockStatus = {
   mode: 'searching',
@@ -132,6 +134,15 @@ async function tick() {
   ticking = true
   try {
     const found = await findWeChatWindow()
+    const visibility = followWeChatVisibility({
+      seen: seenWeChat,
+      visible: mainWindow.isVisible(),
+      hasBounds: Boolean(found.bounds),
+      reason: found.reason,
+    })
+    seenWeChat = visibility.seen
+    if (visibility.hide) mainWindow.hide()
+    if (visibility.show) mainWindow.showInactive()
     if (!found.bounds) {
       const wasFloating = status.mode === 'floating'
       publish(
@@ -232,6 +243,7 @@ if (!app.requestSingleInstanceLock()) {
       if (result.canceled) return ''
       return result.filePaths[0] ?? ''
     })
+    ipcMain.handle('library:classify', (_event, folder: string) => classifyDroppedPath(String(folder ?? '')))
     ipcMain.handle('library:index', (_event, folder: string, kind: string) =>
       indexLibraryFolder(String(folder ?? ''), kind === 'obsidian' ? 'obsidian' : 'folder'),
     )

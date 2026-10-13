@@ -12,7 +12,9 @@ import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
 import { describeLibrary, type IndexFailure, type IndexPhase } from '../domain/knowledge/indexStatus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
-import { retrievalLibrary, type KnowledgeSource } from '../domain/knowledge/library.ts'
+import { isDroppedTextFile, libraryDropPlan, noteFromDroppedText } from '../domain/knowledge/libraryDrop.ts'
+import { LOCAL_NOTE_LIMIT, retrievalLibrary, type KnowledgeSource, type LocalNote } from '../domain/knowledge/library.ts'
+import { focusForHost } from '../domain/wechat/liveSession.ts'
 import { rememberOutbound, turnsWithOutbound, type PendingOutbound } from '../domain/reply/chatContext.ts'
 import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
 import {
@@ -101,6 +103,9 @@ interface CompanionContextValue {
   setLibraryPath: (value: string) => void
   libraryStatus: { tone: 'ok' | 'wait' | 'warn'; text: string }
   chooseLibraryFolder: () => void
+  savedNoteCount: number
+  saveMessage: (text: string) => void
+  acceptLibraryDrop: (transfer: DataTransfer) => Promise<void>
   showDemo: boolean
   toggleDemo: () => void
   pendingSend: { text: string; target: 'wechat' | 'demo' } | null
@@ -186,6 +191,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [folderPath, setFolderPath] = useState(boot.folderPath)
   const [obsidianPath, setObsidianPath] = useState(boot.obsidianPath)
   const [libraryFiles, setLibraryFiles] = useState<Array<{ id: string; title: string; body: string }>>([])
+  const [savedNotes, setSavedNotes] = useState<LocalNote[]>([])
   const [libraryPhase, setLibraryPhase] = useState<IndexPhase>('idle')
   const [libraryCode, setLibraryCode] = useState<IndexFailure | null>(null)
   const [showDemo, setShowDemo] = useState(() => !window.zhida)
@@ -210,6 +216,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     folderPath,
     obsidianPath,
     libraryFiles,
+    savedNotes,
   })
   const draftRef = useRef(draft)
   const committedRef = useRef(committed)
@@ -248,12 +255,13 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       folderPath,
       obsidianPath,
       libraryFiles,
+      savedNotes,
     }
     draftRef.current = draft
     committedRef.current = committed
     variantsRef.current = variants
     indexRef.current = variantIndex
-  }, [persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, knowledgeSource, folderPath, obsidianPath, libraryFiles, draft, committed, variants, variantIndex])
+  }, [persona, activePersonaId, customPersonas, enabledDocIds, modelMode, openaiBase, openaiModel, openaiKey, knowledgeSource, folderPath, obsidianPath, libraryFiles, savedNotes, draft, committed, variants, variantIndex])
 
   const notify = useCallback((text: string) => {
     setToast(text)
@@ -339,7 +347,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener('change', apply)
   }, [])
 
-  const focusSession = tracked ?? session
+  const focusSession = focusForHost(tracked, session, typeof window !== 'undefined' && Boolean(window.zhida))
   const latestCustomer = [...focusSession.messages].reverse().find((message) => message.role === 'customer')
   const intent = classifyIntent(latestCustomer?.text ?? '')
 
@@ -411,7 +419,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         const library = retrievalLibrary({
           source: settingsRef.current.knowledgeSource,
           files: settingsRef.current.libraryFiles,
-          notes: [],
+          notes: settingsRef.current.savedNotes,
           enabledDocIds: enabled,
         })
         const found = await createKnowledgeRetriever(library.docs).search({
@@ -482,7 +490,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return ''
   }, [focusSession.messages])
   const enabledKey = enabledDocIds.join('|')
-  const libraryKey = `${knowledgeSource}:${libraryPhase}:${libraryFiles.length}`
+  const libraryKey = `${knowledgeSource}:${libraryPhase}:${libraryFiles.length}:${savedNotes.map((note) => note.id).join(',')}`
 
   useEffect(() => {
     void runPipeline({ retry: true })
@@ -707,6 +715,41 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       code: libraryCode,
       fallback: knowledgeSource !== 'builtin' && libraryFiles.length === 0,
     }),
+    savedNoteCount: savedNotes.length,
+    saveMessage: (text: string) => {
+      const note = noteFromDroppedText('会话摘录', text)
+      if (!note) return
+      const title = text.replace(/\s+/g, ' ').trim().slice(0, 18) || '会话摘录'
+      setSavedNotes((current) => [{ ...note, title }, ...current].slice(0, LOCAL_NOTE_LIMIT))
+      notify('已整理进知识库')
+    },
+    acceptLibraryDrop: async (transfer: DataTransfer) => {
+      const files = [...transfer.files]
+      for (const file of files) {
+        const droppedPath = window.zhida?.pathForDroppedFile?.(file) ?? ''
+        if (!droppedPath || !window.zhida?.classifyLibrary) continue
+        const kind = await window.zhida.classifyLibrary(droppedPath).catch(() => 'unknown' as const)
+        const plan = libraryDropPlan({ path: droppedPath, kind })
+        if (plan.action !== 'switch') continue
+        setKnowledgeSource(plan.source)
+        if (plan.source === 'obsidian') setObsidianPath(plan.path)
+        else setFolderPath(plan.path)
+        notify(plan.source === 'obsidian' ? '已改用这个 Obsidian 库' : '已改用这个文件夹')
+        return
+      }
+      const notes: LocalNote[] = []
+      for (const file of files) {
+        if (!isDroppedTextFile(file.name)) continue
+        const note = noteFromDroppedText(file.name, await file.text())
+        if (note) notes.push(note)
+      }
+      if (!notes.length) {
+        notify('请拖入文件夹、Obsidian 库，或 Markdown / 文本')
+        return
+      }
+      setSavedNotes((current) => [...notes, ...current].slice(0, LOCAL_NOTE_LIMIT))
+      notify(`已加入知识库 ${notes.length} 篇`)
+    },
     chooseLibraryFolder: () => {
       const pick = window.zhida?.pickLibraryFolder
       if (!pick || knowledgeSource === 'builtin') return

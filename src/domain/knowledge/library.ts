@@ -106,14 +106,17 @@ export function retrievalLibrary(input: {
   notes: LocalNote[]
   enabledDocIds: string[]
 }): { docs: KnowledgeDoc[]; enabledDocIds?: string[]; fallback: boolean } {
+  const notes = input.notes.map(noteToDoc)
   if ((input.source === FOLDER_SOURCE || input.source === OBSIDIAN_SOURCE) && input.files.length > 0) {
     const label = input.source === OBSIDIAN_SOURCE ? 'Obsidian' : '本地文件夹'
-    return { docs: externalDocuments(input.files, label), fallback: false }
+    return { docs: [...externalDocuments(input.files, label), ...notes], fallback: false }
   }
   const docs = builtinDocuments(input.notes)
+  const enabled = new Set(input.enabledDocIds.filter((id) => docs.some((doc) => doc.id === id)))
+  for (const note of input.notes) enabled.add(note.id)
   return {
     docs,
-    enabledDocIds: input.enabledDocIds.filter((id) => docs.some((doc) => doc.id === id)),
+    enabledDocIds: [...enabled],
     fallback: input.source !== BUILTIN_SOURCE,
   }
 }

@@ -19,10 +19,12 @@ export function dockBanner(status: DockStatus | null, bridge: HostBridgeStatus |
   const name = status?.accessibilityName || bridge?.accessibilityName || ''
   const axTitle = stale ? STALE_ACCESS_COPY : '需要辅助功能权限才能贴到微信'
   if (status?.mode === 'docked') {
+    const peer = bridge?.session?.peerName
+    const sessionHint = !needAx && peer && peer !== '当前微信' ? `会话「${peer}」` : ''
     return {
       tone: 'ok',
       title: status.detail,
-      hint: needAx ? axTitle : '',
+      hint: needAx ? axTitle : sessionHint,
       primary: needAx ? 'accessibility' : null,
     }
   }

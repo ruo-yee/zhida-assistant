@@ -8,6 +8,26 @@ export const MAX_LIBRARY_DEPTH = 5
 
 const TEXT = new Set(['.md', '.markdown', '.txt'])
 
+/** A dropped directory becomes the knowledge source. A file stays unknown so the caller can read it as a note. */
+export async function classifyDroppedPath(target: string): Promise<'folder' | 'obsidian' | 'unknown'> {
+  const root = target.trim()
+  if (!root) return 'unknown'
+  let info
+  try {
+    info = await stat(root)
+  } catch {
+    return 'unknown'
+  }
+  if (!info.isDirectory()) return 'unknown'
+  try {
+    const marker = await stat(path.join(root, '.obsidian'))
+    if (marker.isDirectory()) return 'obsidian'
+  } catch {
+    return 'folder'
+  }
+  return 'folder'
+}
+
 /** Read Markdown and text notes on this machine. Skips hidden folders. Does not upload anything. */
 export async function indexLibraryFolder(folder: string, kind: 'folder' | 'obsidian'): Promise<FolderIndexResult> {
   const root = folder.trim()

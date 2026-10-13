@@ -1,8 +1,12 @@
 import { BookOpen, Lightbulb, Moon, MoreHorizontal, Settings, Sparkles, Sun } from 'lucide-react'
+import { useState } from 'react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
+import { intentHint } from '../domain/intent.ts'
 import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
 import { citationForReply } from '../domain/reply/citation.ts'
 import { QUICK_PERSONAS } from '../domain/reply/personas.ts'
+import { isTodoLine, sessionGlance } from '../domain/reply/sessionGlance.ts'
+import { PENDING_SESSION_ID } from '../domain/wechat/liveSession.ts'
 import { formatChatType, formatResultCount, formatSessionChip } from '../domain/format.ts'
 import { ActionBar } from './ActionBar.tsx'
 import { SettingsPage } from './SettingsPage.tsx'
@@ -58,13 +62,35 @@ function PersonaSwitcher() {
 
 export function CompanionPane({ hidden }: { hidden: boolean }) {
   const app = useCompanion()
+  const [dragging, setDragging] = useState(false)
   const chatLabel = formatChatType(app.focusSession.chatType)
   return (
     <section
-      className={hidden ? 'companion is-hidden' : 'companion'}
+      className={hidden ? 'companion is-hidden' : dragging ? 'companion is-dropping' : 'companion'}
       aria-label="智答助手"
       aria-busy={app.phase === 'loading'}
+      onDragEnter={(event) => {
+        if (![...event.dataTransfer.types].includes('Files')) return
+        event.preventDefault()
+        setDragging(true)
+      }}
+      onDragOver={(event) => {
+        if (![...event.dataTransfer.types].includes('Files')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        setDragging(true)
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDragging(false)
+      }}
+      onDrop={(event) => {
+        event.preventDefault()
+        setDragging(false)
+        void app.acceptLibraryDrop(event.dataTransfer)
+      }}
     >
+      {dragging ? <div className="drop-veil">松开后加入知识库</div> : null}
       <DockStatusBar />
       {!app.showDemo && !app.narrow ? (
         <p className="demo-note">
@@ -113,6 +139,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
         </div>
       </header>
       {app.settingsOpen ? null : <PersonaSwitcher />}
+      {app.settingsOpen ? null : <IntentHint />}
       <div className="pane-scroll scroll">
         {app.settingsOpen ? <SettingsPage /> : <CompanionBody />}
       </div>
@@ -151,13 +178,51 @@ function CandidateList() {
   )
 }
 
+function IntentHint() {
+  const app = useCompanion()
+  if (app.focusSession.id === PENDING_SESSION_ID) return null
+  const hint = intentHint(app.intent)
+  return <p className={`intent-hint is-${hint.tone}`}>{hint.text}</p>
+}
+
+function SessionGlance() {
+  const app = useCompanion()
+  const [todosOnly, setTodosOnly] = useState(false)
+  const waiting = app.focusSession.id === PENDING_SESSION_ID
+  const glance = sessionGlance(app.focusSession.messages, app.focusSession.chatType)
+  const rows = (todosOnly ? app.focusSession.messages.filter((message) => isTodoLine(message.text)) : app.focusSession.messages).slice(-6)
+  return (
+    <div className="glance">
+      <div className="glance-head">
+        <span>{waiting ? '正在等微信当前会话' : glance.summary}</span>
+        {waiting ? null : (
+          <button type="button" className={todosOnly ? 'is-on' : undefined} onClick={() => setTodosOnly((value) => !value)}>
+            待办 {glance.todos.length}
+          </button>
+        )}
+      </div>
+      {waiting ? <p className="quiet">回复不会拿演示对话当上下文。</p> : null}
+      {rows.map((message) => (
+        <div key={message.id} className="glance-row">
+          <span>{message.role === 'agent' ? '我' : '对方'} · {message.text}</span>
+          <button type="button" onClick={() => app.saveMessage(message.text)}>
+            整理
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function CompanionBody() {
   const app = useCompanion()
   return (
     <>
+        <SessionGlance />
         <div className="section-title">
           <BookOpen size={16} />
           知识检索
+          {app.savedNoteCount > 0 ? <span className="meta">含拖入 {app.savedNoteCount} 篇</span> : null}
           {app.phase === 'ready' || app.phase === 'empty' ? (
             <span className="meta">{formatResultCount(app.hits.length)}</span>
           ) : null}

@@ -66,6 +66,25 @@ describe('dockBanner', () => {
     ).toMatchObject({ tone: 'ok', title: '已贴在微信右侧', hint: STALE_ACCESS_COPY, primary: 'accessibility' })
   })
 
+  it('names the live session on a successful dock and does not repeat a window-read error', () => {
+    expect(
+      dockBanner(dock({ mode: 'docked', detail: '已贴在微信右侧' }), {
+        ...bridge,
+        axTrusted: true,
+        needsAccessibility: false,
+        detail: '微信在运行，但还读不到窗口。',
+        session: {
+          id: 'wechat-live:李华',
+          peerName: '李华',
+          presence: 'online',
+          chatType: 'private',
+          composerText: '',
+          messages: [],
+        },
+      }),
+    ).toEqual({ tone: 'ok', title: '已贴在微信右侧', hint: '会话「李华」', primary: null })
+  })
+
   it('shortens a missing WeChat window', () => {
     expect(dockBanner(dock(), null)?.title).toBe('微信没有运行')
     expect(dockBanner(null, null)).toBeNull()

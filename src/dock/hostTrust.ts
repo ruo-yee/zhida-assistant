@@ -64,6 +64,7 @@ export interface AxTrustView {
   title: string
   hasTextArea: boolean
   composer: string | null
+  transcript?: string[]
   reason: string
 }
 

@@ -14,6 +14,7 @@ export interface AxView {
   title: string
   hasTextArea: boolean
   composer: string | null
+  transcript: string[]
   reason: string
 }
 
@@ -37,7 +38,7 @@ function run(argv) {
     var running = false
     try { hostTrusted = payload && payload.hostTrusted ? true : false } catch (inner) { hostTrusted = false }
     try { running = !!findWeChat() } catch (inner) { running = false }
-    return JSON.stringify({ ok: false, trusted: hostTrusted, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: '辅助功能调用失败' })
+    return JSON.stringify({ ok: false, trusted: hostTrusted, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: '辅助功能调用失败' })
   }
 }
 
@@ -49,31 +50,33 @@ function perform(op, text, hostTrusted) {
   var app = null
   try { app = findWeChat() } catch (error) { app = null }
   var running = !!app
-  if (!trusted) return { ok: false, trusted: false, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'need-ax' }
-  if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'not-running' }
+  if (!trusted) return { ok: false, trusted: false, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'need-ax' }
+  if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'not-running' }
   var pid = 0
   try { pid = Number(ObjC.unwrap(app.processIdentifier)) } catch (error) { pid = Number(app.processIdentifier) }
   var root = $.AXUIElementCreateApplication(pid)
   $.AXUIElementSetMessagingTimeout(root, 0.5)
   try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true) } catch (error) {}
+  delay(0.2)
   var located = mainWindow(pid, root)
-  if (!located) return { ok: false, trusted: true, running: true, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'no-window' }
+  if (!located) return { ok: false, trusted: true, running: true, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'no-window' }
   var box = findInput(located.window)
   var composer = box ? axString(copyAttr(box, 'AXValue')) : null
   var title = chatTitle(located)
   if (op === 'set' || op === 'clear') {
-    if (!box) return { ok: false, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: false, composer: null, reason: 'no-input' }
+    if (!box) return { ok: false, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: false, composer: null, transcript: [], reason: 'no-input' }
     var err = $.AXUIElementSetAttributeValue(box, $('AXValue'), $(op === 'clear' ? '' : text))
     var after = axString(copyAttr(box, 'AXValue'))
-    return { ok: err === 0, trusted: true, running: true, hasWindow: true, windowId: located.id, title: chatTitle(located), hasTextArea: true, composer: after, reason: err === 0 ? '' : 'write-failed' }
+    return { ok: err === 0, trusted: true, running: true, hasWindow: true, windowId: located.id, title: chatTitle(located), hasTextArea: true, composer: after, transcript: [], reason: err === 0 ? '' : 'write-failed' }
   }
   if (op === 'return') {
     pressReturn()
     delay(0.15)
     var left = box ? axString(copyAttr(box, 'AXValue')) : null
-    return { ok: true, trusted: true, running: true, hasWindow: true, windowId: located.id, title: chatTitle(located), hasTextArea: !!box, composer: left, reason: '' }
+    return { ok: true, trusted: true, running: true, hasWindow: true, windowId: located.id, title: chatTitle(located), hasTextArea: !!box, composer: left, transcript: [], reason: '' }
   }
-  return { ok: true, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: !!box, composer: composer, reason: '' }
+  var lines = visibleLines(located.window, composer)
+  return { ok: true, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: !!box, composer: composer, transcript: lines, reason: '' }
 }
 
 function nsText(value) {
@@ -254,20 +257,101 @@ function chatTitle(located) {
 
 function findHeader(window) {
   if (!window) return ''
+  var named = textByIdentifier(window, { big_title_line_h_view: 1, title_view: 1, chat_title: 1 })
+  if (named) return named
+  var frame = axPoint(window)
+  if (!frame) return ''
+  var best = ''
+  var bestY = -1
+  var queue = [window]
+  var seen = 0
+  while (queue.length && seen < 2500) {
+    var el = queue.shift()
+    seen += 1
+    var role = axString(copyAttr(el, 'AXRole')) || ''
+    if (role === 'AXStaticText') {
+      var value = cleanLine(axString(copyAttr(el, 'AXValue')) || axString(copyAttr(el, 'AXTitle')) || '')
+      var box = axPoint(el)
+      if (value && value.length <= 40 && box && frame.w > 0 && !isChrome(value)) {
+        var onRight = box.x > frame.x + frame.w * 0.22
+        var onTop = box.y > frame.y + frame.h * 0.82
+        if (onRight && onTop && box.y >= bestY) {
+          best = value
+          bestY = box.y
+        }
+      }
+    }
+    var kids = childrenOf(el)
+    for (var i = 0; i < kids.length; i++) queue.push(kids[i])
+  }
+  return best
+}
+
+function textByIdentifier(window, names) {
   var queue = [window]
   var seen = 0
   while (queue.length && seen < 3000) {
     var el = queue.shift()
     seen += 1
     var ident = axString(copyAttr(el, 'AXIdentifier')) || ''
-    if (ident === 'big_title_line_h_view') {
-      var value = axString(copyAttr(el, 'AXValue')) || axString(copyAttr(el, 'AXTitle')) || ''
+    if (names[ident]) {
+      var value = cleanLine(axString(copyAttr(el, 'AXValue')) || axString(copyAttr(el, 'AXTitle')) || '')
       if (value) return value
     }
     var kids = childrenOf(el)
     for (var i = 0; i < kids.length; i++) queue.push(kids[i])
   }
   return ''
+}
+
+function visibleLines(window, composer) {
+  if (!window) return []
+  var skip = cleanLine(composer || '')
+  var frame = axPoint(window)
+  var placed = []
+  var plain = []
+  var queue = [window]
+  var seen = 0
+  while (queue.length && seen < 2500) {
+    var el = queue.shift()
+    seen += 1
+    var role = axString(copyAttr(el, 'AXRole')) || ''
+    if (role === 'AXStaticText') {
+      var value = cleanLine(axString(copyAttr(el, 'AXValue')) || '')
+      if (value.length >= 2 && value.length < 500 && value !== skip && !isChrome(value)) {
+        if (plain.indexOf(value) < 0) plain.push(value)
+        var box = axPoint(el)
+        var inColumn = frame && box && box.x > frame.x + frame.w * 0.22 && box.y < frame.y + frame.h * 0.82 && box.y > frame.y + 36
+        if (inColumn && placed.indexOf(value) < 0) placed.push(value)
+      }
+    }
+    var kids = childrenOf(el)
+    for (var i = 0; i < kids.length; i++) queue.push(kids[i])
+  }
+  var lines = placed.length ? placed : plain
+  return lines.slice(-12)
+}
+
+function axPoint(el) {
+  var raw = copyAttr(el, 'AXPosition')
+  var size = axSize(el)
+  if (!raw || !size) return null
+  var slot = Ref()
+  var ok = $.AXValueGetValue(raw, $.kAXValueCGPointType, slot)
+  if (!ok) return null
+  var point = slot[0]
+  var x = Number(point.x || 0)
+  var y = Number(point.y || 0)
+  if (!isFinite(x) || !isFinite(y)) return null
+  return { x: x, y: y, w: size.w, h: size.h }
+}
+
+function cleanLine(value) {
+  return String(value || '').replace(/\\s+/g, ' ').trim()
+}
+
+function isChrome(value) {
+  return value === '微信' || value === 'WeChat' || value === 'Weixin' || value === '搜索' || value === '聊天' || value === '通讯录'
 }
 
 function pressReturn() {
@@ -342,9 +426,11 @@ export async function runAx(op: 'inspect' | 'set' | 'clear' | 'return', text = '
       title: '',
       hasTextArea: false,
       composer: null,
+      transcript: [],
       reason: /ENOENT|not found/i.test(result.stderr) ? '辅助功能接口不存在' : '辅助功能调用失败',
     }
-    return reconcileAxView(view, hostTrusted, workspaceRunning)
+    const reconciled = reconcileAxView(view, hostTrusted, workspaceRunning)
+    return { ...reconciled, transcript: reconciled.transcript ?? [] }
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -363,6 +449,9 @@ function parseAx(stdout: string): AxView | null {
       title: String(raw.title || ''),
       hasTextArea: Boolean(raw.hasTextArea),
       composer: raw.composer == null ? null : String(raw.composer),
+      transcript: Array.isArray(raw.transcript)
+        ? raw.transcript.map((item) => String(item)).filter(Boolean).slice(-12)
+        : [],
       reason: String(raw.reason || ''),
     }
   } catch {

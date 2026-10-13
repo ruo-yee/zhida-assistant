@@ -98,6 +98,7 @@ button { cursor: pointer; }
 }
 .wechat { flex: 1; background: var(--chat-bg); }
 .companion {
+  position: relative;
   width: clamp(420px, 42vw, 520px);
   flex: none;
   background: var(--panel-bg);
@@ -504,6 +505,54 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1
   font-weight: 550;
 }
 .reply-card .cite { margin-bottom: 6px; }
+.companion.is-dropping { outline: 2px dashed var(--brand); outline-offset: -6px; }
+.drop-veil {
+  position: absolute;
+  inset: 8px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  color: var(--ink);
+  font-weight: 650;
+  pointer-events: none;
+}
+.intent-hint {
+  margin: 8px 12px 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.intent-hint.is-ok { background: color-mix(in srgb, var(--brand) 14%, var(--card)); color: var(--ink); }
+.intent-hint.is-wait { background: var(--header); color: var(--muted); }
+.intent-hint.is-warn { background: #fff6d8; color: #6b4e00; }
+.glance {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+.glance-head, .glance-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.glance-head { font-size: 13px; font-weight: 650; }
+.glance-head button, .glance-row button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--brand-deep);
+  font-size: 12px;
+  font-weight: 650;
+}
+.glance-head button.is-on { text-decoration: underline; }
+.glance-row { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.glance-row span { min-width: 0; }
 .persona-bar {
   flex: none;
   display: flex;

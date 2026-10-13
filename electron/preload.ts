@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { DockStatus } from '../src/dock/types.ts'
 import type { FolderIndexResult } from '../src/domain/knowledge/indexStatus.ts'
 import type { HostActionResult, HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld('zhida', {
   pickLibraryFolder: (kind: 'folder' | 'obsidian'): Promise<string> => ipcRenderer.invoke('library:pick', kind),
   indexLibrary: (folder: string, kind: 'folder' | 'obsidian'): Promise<FolderIndexResult> =>
     ipcRenderer.invoke('library:index', folder, kind),
+  pathForDroppedFile: (file: Parameters<typeof webUtils.getPathForFile>[0]): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
+  classifyLibrary: (folder: string): Promise<'folder' | 'obsidian' | 'unknown'> =>
+    ipcRenderer.invoke('library:classify', folder),
   onDockStatus: (callback: (status: DockStatus) => void) => {
     const listener = (_event: IpcRendererEvent, status: DockStatus) => callback(status)
     ipcRenderer.on('dock:status', listener)

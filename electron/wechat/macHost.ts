@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
 import { accessibilityDetail } from '../../src/domain/wechat/accessibilityCopy.ts'
-import type { WeChatMessage, WeChatSession } from '../../src/domain/wechat/WeChatBridge.ts'
+import type { WeChatMessage } from '../../src/domain/wechat/WeChatBridge.ts'
 import {
   NEED_AX,
   SendGuard,
@@ -12,6 +12,7 @@ import {
   planSend,
   type ComposerView,
 } from '../../src/domain/wechat/composerPolicy.ts'
+import { describeLiveSession, liveSession } from '../../src/domain/wechat/liveSession.ts'
 import { matchChat, usableTitle } from '../../src/domain/wechat/matchChat.ts'
 import {
   decodeMessageText,
@@ -72,41 +73,45 @@ export class MacWeChatHost {
     const view = await runAx('inspect')
     const base = this.statusFrom(view)
     if (!view.running || !view.trusted || !view.hasWindow) return base
+    const composerText = view.composer?.trim() ?? ''
+    const transcript = view.transcript ?? []
     try {
       const loaded = await this.ensureLibrary()
-      if (!loaded.root || !loaded.entries) {
-        return { ...base, detail: loaded.detail, session: titleSession(view.title) }
-      }
-      const chats = await this.conversationIndex(loaded.root, loaded.entries)
-      const title = usableTitle(view.title)
-      const chat = matchChat(title, chats)
-      if (!title) return { ...base, dbReady: true, detail: '已连接微信，但没有读到当前会话标题。' }
-      if (!chat) {
-        return {
-          ...base,
-          dbReady: true,
-          detail: `已看到会话「${title}」，本地记录里没有唯一对应的联系人。`,
-          session: titleSession(title),
+      let db: {
+        id: string
+        peerName: string
+        chatType: 'private' | 'group'
+        messages: WeChatMessage[]
+      } | null = null
+      if (loaded.root && loaded.entries) {
+        const chats = await this.conversationIndex(loaded.root, loaded.entries)
+        const title = usableTitle(view.title)
+        const chat = title ? matchChat(title, chats) : null
+        if (chat) {
+          db = {
+            id: `wechat:${chat.chatId}`,
+            peerName: chat.chatName,
+            chatType: chat.group ? 'group' : 'private',
+            messages: await this.recentMessages(loaded.root, loaded.entries, chat),
+          }
         }
       }
-      const messages = await this.recentMessages(loaded.root, loaded.entries, chat)
+      const session = liveSession({ hasWindow: true, title: view.title, transcript, composerText, db })
+      const fromDatabase = Boolean(db && db.messages.length > 0)
       return {
         ...base,
-        dbReady: true,
+        dbReady: Boolean(loaded.root && loaded.entries),
         available: true,
-        detail: `正在跟随微信会话「${chat.chatName}」。`,
-        session: {
-          id: `wechat:${chat.chatId}`,
-          peerName: chat.chatName,
-          presence: 'online',
-          chatType: chat.group ? 'group' : 'private',
-          composerText: view.composer?.trim() ?? '',
-          messages,
-        },
+        detail: session ? describeLiveSession(session, fromDatabase) : loaded.detail,
+        session,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '读微信记录失败'
-      return { ...base, detail: message, session: titleSession(view.title) }
+      return {
+        ...base,
+        detail: message,
+        session: liveSession({ hasWindow: true, title: view.title, transcript, composerText, db: null }),
+      }
     }
   }
 
@@ -307,19 +312,6 @@ function toComposer(view: AxView): ComposerView {
 
 function sameTitle(before: string, after: string) {
   return usableTitle(before) === usableTitle(after)
-}
-
-function titleSession(title: string): WeChatSession | null {
-  const name = usableTitle(title)
-  if (!name) return null
-  return {
-    id: `wechat-title:${name}`,
-    peerName: name,
-    presence: 'online',
-    chatType: /[(（]\s*\d{1,5}/.test(title) ? 'group' : 'private',
-    composerText: '',
-    messages: [],
-  }
 }
 
 function handled(ok: boolean, reason: string): HostActionResult {

@@ -277,7 +277,9 @@ function KnowledgeSettings() {
   return (
     <>
       <h3>知识库</h3>
-      <p className="hint">知识摘录可以附在回复后面。它不是上下文，上下文仍是当前微信会话里的对话。</p>
+      <p className="hint">
+        知识摘录可以附在回复后面。它不是上下文，上下文仍是当前微信会话里的对话。把文件夹、Obsidian 库或 Markdown 拖进助手面板，会立刻并入检索。
+      </p>
       <div className="seg" role="radiogroup" aria-label="知识来源">
         {SOURCES.map((item) => (
           <button
