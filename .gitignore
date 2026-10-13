@@ -12,6 +12,7 @@ dist
 *.tsbuildinfo
 dist-ssr
 dist-electron
+release
 *.local
 
 .env

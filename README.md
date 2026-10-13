@@ -23,6 +23,34 @@ npm run start
 
 Linux 上同样会打开桌面窗口，但不会去贴微信（没有微信窗口接口），只在屏幕中央悬浮。容器里若 Chromium 的 setuid sandbox 装不上，程序只在 Linux 上关掉它，macOS 和 Windows 仍用默认沙箱。
 
+## 打包安装包
+
+配置在 `electron-builder.yml`。产物写到 `release/`，每个大约 100–150 MB（Mac 的 zip 更大），不进 git。
+
+```bash
+npm install
+npm run dist:win      # Windows：安装包、便携版、zip
+npm run dist:mac      # macOS：dmg 和 zip。完整、可签名的包要在 Mac 上执行
+npm run dist:linux    # Linux：AppImage 和 zip
+npm run dist          # Linux 和 Windows
+```
+
+打出来的文件名：
+
+- `release/zhida-assistant-0.1.0-win-x64-setup.exe`
+- `release/zhida-assistant-0.1.0-win-x64-portable.exe`
+- `release/zhida-assistant-0.1.0-win-x64.zip`
+- `release/zhida-assistant-0.1.0-linux-x86_64.AppImage`
+- `release/zhida-assistant-0.1.0-linux-x64.zip`
+- `release/zhida-assistant-0.1.0-mac-x64.dmg` 与 `mac-arm64.dmg`
+- `release/zhida-assistant-0.1.0-mac-x64.zip` 与 `mac-arm64.zip`
+
+在 Mac 上打开 `.dmg`，把「智答助手」拖进「应用程序」，再到系统设置里授予辅助功能，助手才能贴住微信。Windows 运行 `*-setup.exe` 安装，或直接运行 `*-portable.exe`。
+
+Mac 配置已经写好：`dmg` 和 `zip`，x64 与 arm64，默认不签名。签名需要在 macOS 上配置 Apple 开发者证书，并会用到 `build/entitlements.mac.plist` 里的 Apple Events 权限。在 Linux 上执行 `npm run dist:mac` 可以写出未签名的 zip，但打 `.dmg` 会因为缺少 macOS 的 `sips` 而失败，命令以非零退出。要拿到 dmg，请在 Mac 上执行 `npm run dist:mac`。
+
+在 Linux 上交叉打 Windows 的 NSIS 安装包时，需要能运行 32 位程序的 Wine。在 Windows 本机执行 `npm run dist:win` 不需要 Wine。
+
 数据留在本机：演示知识库打在程序里，人设和模型设置写在本机 localStorage，可选的接口密钥也只存在这台机器上。程序不会上传会话，也不会写回微信的数据库。
 
 ### macOS 权限

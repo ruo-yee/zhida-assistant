@@ -1,0 +1,64 @@
+appId: app.zhida.assistant
+productName: 智答助手
+executableName: zhida-assistant
+copyright: Copyright © 2026 智答助手
+asar: true
+npmRebuild: false
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!node_modules/**"
+artifactName: zhida-assistant-${version}-${os}-${arch}.${ext}
+mac:
+  category: public.app-category.productivity
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  extendInfo:
+    NSAppleEventsUsageDescription: 智答助手需要读取微信窗口的位置，以便贴在聊天窗口右侧。
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: zhida-assistant-${version}-win-${arch}-setup.${ext}
+portable:
+  artifactName: zhida-assistant-${version}-win-${arch}-portable.${ext}
+linux:
+  syncDesktopName: true
+  category: Utility
+  synopsis: 贴在微信旁的本地回复助手
+  description: 检索本地知识并给出可编辑的回复建议。数据留在本机。
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+publish: null
