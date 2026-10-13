@@ -2,7 +2,7 @@ import path from 'node:path'
 import { homedir } from 'node:os'
 import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
-import { accessibilityClientName, needAccessibilityReason } from '../../src/domain/wechat/accessibilityCopy.ts'
+import { accessibilityDetail } from '../../src/domain/wechat/accessibilityCopy.ts'
 import type { WeChatMessage, WeChatSession } from '../../src/domain/wechat/WeChatBridge.ts'
 import {
   NEED_AX,
@@ -163,7 +163,7 @@ export class MacWeChatHost {
 
   private statusFrom(view: AxView): HostBridgeStatus {
     let detail = '正在检查微信…'
-    if (!view.trusted) detail = needAccessibilityReason(accessibilityClientName(app.isPackaged))
+    if (!view.trusted) detail = accessibilityDetail(app.isPackaged)
     else if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
     else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = '微信在运行，但还读不到窗口。'
     else if (!view.hasWindow || view.reason === 'no-window') detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
@@ -328,7 +328,7 @@ function handled(ok: boolean, reason: string): HostActionResult {
 
 function refuseReason(reason: string) {
   if (reason !== NEED_AX) return reason
-  return needAccessibilityReason(accessibilityClientName(app.isPackaged))
+  return accessibilityDetail(app.isPackaged)
 }
 
 function clock(seconds: number) {

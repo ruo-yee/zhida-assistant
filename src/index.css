@@ -131,6 +131,7 @@ button { cursor: pointer; }
 .dock-status.is-auth { flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; }
 .dock-copy { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 12rem; }
 .dock-hint { color: var(--muted); }
+.dock-status > .dock-action { margin-left: auto; flex: none; }
 .dock-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .dock-action {
   border: 0;

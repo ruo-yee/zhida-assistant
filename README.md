@@ -45,9 +45,37 @@ npm run dist          # Linux 和 Windows
 - `release/zhida-assistant-0.1.0-mac-x64.dmg` 与 `mac-arm64.dmg`
 - `release/zhida-assistant-0.1.0-mac-x64.zip` 与 `mac-arm64.zip`
 
-在 Mac 上打开 `.dmg`，把「智答助手」拖进「应用程序」。窗口会按微信的进程贴到它旁边；若系统拦住权限，点窗口里的「打开辅助功能设置」或「打开屏幕录制设置」，打开对应开关即可，不必再去菜单里找「重新贴到微信」。Windows 运行 `*-setup.exe` 安装，或直接运行 `*-portable.exe`。
+在 Mac 上打开 `.dmg`，把「智答助手」拖进「应用程序」。窗口会按微信的进程贴到它旁边；若系统拦住权限，点窗口里的「打开辅助功能设置」或「打开屏幕录制设置」。换过签名之后要重新授权一次：关掉再打开「智答助手」，完全退出后重开。Windows 运行 `*-setup.exe` 安装，或直接运行 `*-portable.exe`。
 
-Mac 配置已经写好：`dmg` 和 `zip`，x64 与 arm64，默认不签名。签名需要在 macOS 上配置 Apple 开发者证书，并会用到 `build/entitlements.mac.plist` 里的 Apple Events 权限。在 Linux 上执行 `npm run dist:mac` 可以写出未签名的 zip，但打 `.dmg` 会因为缺少 macOS 的 `sips` 而失败，命令以非零退出。要拿到 dmg，请在 Mac 上执行 `npm run dist:mac`。
+Mac 包是 `dmg` 和 `zip`，x64 与 arm64。请在 Mac 上执行 `npm run dist:mac`。脚本会选一个**稳定**签名，按这个顺序：
+
+1. 已设置的 `CSC_NAME`
+2. 钥匙串里的 `Apple Development`（这台机器上可以是 `Apple Development: 6445016@qq.com (R62G2LP3VX)`）
+3. 本机自签身份 `Zhida Assistant Local Signing`。没有的话 `packaging/make_local_signing.sh` 会创建一次，之后不再换证
+
+不要用 ad-hoc（`codesign -s -`）或把 `mac.identity` 设成 `null`。前者每次构建哈希都变，后者会留下 `Identifier=Electron`。两种情况都是：系统设置开关开着，`isTrustedAccessibilityClient` 仍是 false。签好之后 `codesign -dv` 应看到 `Identifier=app.zhida.assistant`，且不是 `Signature=adhoc`。
+
+指定 Apple Development：
+
+```bash
+CSC_NAME='Apple Development: 6445016@qq.com (R62G2LP3VX)' npm run dist:mac
+```
+
+只用本机自签（和微信 JEV 回复助手的 `WeChat JEV Local Signing` 同一做法）：
+
+```bash
+npm run sign:mac-identity
+CSC_NAME='Zhida Assistant Local Signing' npm run dist:mac
+```
+
+第一次换到这个签名后，清掉旧授权再开一次开关：
+
+```bash
+tccutil reset Accessibility app.zhida.assistant
+tccutil reset ScreenCapture app.zhida.assistant
+```
+
+之后用同一个身份重新打包，辅助功能应保持有效。Linux 上的 `npm run dist:mac` 打不出能维持授权的签名。
 
 在 Linux 上交叉打 Windows 的 NSIS 安装包时，需要能运行 32 位程序的 Wine。在 Windows 本机执行 `npm run dist:win` 不需要 Wine。
 
@@ -59,12 +87,12 @@ Mac 配置已经写好：`dmg` 和 `zip`，x64 与 arm64，默认不签名。签
 
 - 用 `NSWorkspace` 找 bundle id `com.tencent.xinWeChat`（以及 `WeChatAppEx`），拿到进程号。
 - 用 CoreGraphics 的 `CGWindowList` 在该进程的屏幕上窗口里，取最大的一层普通窗口（约 240×240 以上）。标题空白也能对上。坐标是左上角原点，和 Electron 的 `setBounds` 一致，不会再按 AppKit 的底边把 Y 翻一次。
-- 窗口列表完全看不到其它应用时，才改走辅助功能读窗口位置。菜单里的「重新贴到微信」只是补救，授权后下一次轮询或窗口重新获得焦点会自己贴上。
+- 窗口列表看不到微信时，用「系统事件」读取窗口位置（例如 `0,111,915,693,微信`，同样是左上角原点）。读到了就贴上，不再把屏幕录制当成必须完成的步骤。菜单里的「重新贴到微信」只是补救。
 
 两项权限分开：
 
-- **屏幕录制**：只有系统把其它应用的窗口从列表里拿掉时才需要。状态栏会出现「打开屏幕录制设置」。
-- **辅助功能**：写入输入框、读取当前会话标题时需要。是否已授权以本应用为准（`systemPreferences.isTrustedAccessibilityClient`），不以 `osascript` 自己的辅助功能状态为准。第一次发现没授权时，系统会弹出一次信任对话框（不会每次轮询都弹）。状态栏的「打开辅助功能设置」会打开辅助功能列表。微信进程在不在，用 `NSWorkspace` 单独看；辅助功能调用失败不会被说成「微信没有运行」。
+- **屏幕录制**：只有窗口列表和「系统事件」都读不到微信时，状态栏才出现「打开屏幕录制设置」。已经贴上之后，它不再挡住窗口。
+- **辅助功能**：写入输入框、读取当前会话标题时需要。是否已授权以本应用为准（`systemPreferences.isTrustedAccessibilityClient`），不以 `osascript` 自己的辅助功能状态为准。安装包必须用稳定身份签名（见上面的 `npm run dist:mac`）。签名换过之后开关可能还开着、这个接口仍返回否，状态栏写「请关掉再打开「智答助手」权限并完全退出后重开（更新后需重新授权）」，并只留「打开辅助功能设置」。微信进程在不在，用 `NSWorkspace` 单独看；辅助功能调用失败不会被说成「微信没有运行」。
 
 列表里的名字：安装包是「智答助手」；`npm run dev` 或 `npm run start` 直接跑 Electron 时是「Electron」。打开开关后不用重启，也不用再点「重新贴到微信」。
 

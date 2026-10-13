@@ -13,9 +13,11 @@ files:
   - package.json
   - "!node_modules/**"
 artifactName: zhida-assistant-${version}-${os}-${arch}.${ext}
+# packaging/build_mac.sh sets CSC_NAME. null skips signing (Identifier stays Electron).
+# "-" is a new ad-hoc hash every build, so isTrustedAccessibilityClient stays false.
+afterSign: scripts/macStableSign.cjs
 mac:
   category: public.app-category.productivity
-  identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
   target:

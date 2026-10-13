@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { dockOutcomeWithAx } from '../src/dock/axDock.ts'
 import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
-import { electronBoundsFromQuartz, parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
+import { parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
 import { dockWhenWindowLookupFails } from '../src/dock/hostTrust.ts'
 import { parseBoundsReport } from '../src/dock/parse.ts'
 import type { FindOutcome } from '../src/dock/types.ts'
@@ -32,12 +33,13 @@ async function findDarwin(): Promise<FindOutcome> {
     4000,
   )
   const snapshot = parseWeChatSnapshot(listed.stdout)
-  if (snapshot) return selectWeChatWindow(snapshot)
+  const fromList = snapshot ? selectWeChatWindow(snapshot) : null
+  if (fromList?.reason === 'ok' && fromList.bounds) return fromList
 
   const hostTrusted = electronAccessibilityTrusted()
   const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
-  const fromAx = parseBoundsReport(ax.stdout)
-  if (fromAx) return { bounds: electronBoundsFromQuartz(fromAx), reason: 'ok' }
+  const resolved = dockOutcomeWithAx(fromList, parseBoundsReport(ax.stdout))
+  if (resolved) return resolved
 
   const blob = `${listed.stderr}\n${ax.stderr}`
   return dockWhenWindowLookupFails({

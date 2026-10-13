@@ -1,0 +1,19 @@
+import { electronBoundsFromQuartz, MIN_DOCK_WINDOW } from './wechatWindow.ts'
+import type { FindOutcome, HostWindow } from './types.ts'
+
+/**
+ * CGWindowList is empty without Screen Recording. System Events still returns
+ * `x,y,width,height,title` in the same top-left space as Electron, for example
+ * `0,111,915,693,微信`. A hit docks immediately and is not a Screen Recording failure.
+ */
+export function dockOutcomeWithAx(fromList: FindOutcome | null, ax: HostWindow | null): FindOutcome | null {
+  if (fromList?.reason === 'ok' && fromList.bounds) return fromList
+  if (ax && ax.width >= MIN_DOCK_WINDOW && ax.height >= MIN_DOCK_WINDOW) {
+    return { bounds: electronBoundsFromQuartz(ax), reason: 'ok' }
+  }
+  if (!fromList) return null
+  if (fromList.reason === 'screen-recording' && fromList.needsAccessibility) {
+    return { bounds: null, reason: 'permission', needsAccessibility: true }
+  }
+  return fromList
+}

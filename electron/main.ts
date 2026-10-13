@@ -4,7 +4,7 @@ import { boundsNearlyEqual, computeDockBounds } from '../src/dock/bounds.ts'
 import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
-import { promptForAccessibilityOnce } from './accessibility.ts'
+import { electronAccessibilityTrusted, promptForAccessibilityOnce } from './accessibility.ts'
 import { findWeChatWindow } from './findWeChat.ts'
 import { openPrivacyPane } from './openPrivacy.ts'
 import { createWeChatHost } from './wechat/host.ts'
@@ -49,8 +49,9 @@ let wechatTimer: ReturnType<typeof setInterval> | null = null
 let wechatTicking = false
 
 function nameDock(next: DockStatus): DockStatus {
-  if (!accessibilityName) return next
-  return { ...next, accessibilityName }
+  const named = accessibilityName ? { ...next, accessibilityName } : next
+  if (process.platform !== 'darwin' || !app.isPackaged) return named
+  return { ...named, accessibilityStale: !electronAccessibilityTrusted() }
 }
 
 function publish(next: DockStatus) {
@@ -61,7 +62,8 @@ function publish(next: DockStatus) {
     named.side === status.side &&
     named.needsAccessibility === status.needsAccessibility &&
     named.needsScreenRecording === status.needsScreenRecording &&
-    named.accessibilityName === status.accessibilityName
+    named.accessibilityName === status.accessibilityName &&
+    named.accessibilityStale === status.accessibilityStale
   ) {
     return
   }

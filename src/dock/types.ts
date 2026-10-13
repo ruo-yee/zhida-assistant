@@ -46,4 +46,9 @@ export interface DockStatus {
   needsScreenRecording?: boolean
   /** macOS Accessibility / Screen Recording list name: 智答助手 or Electron. */
   accessibilityName?: string
+  /**
+   * Packaged build: the trust API is false. The System Settings toggle can stay
+   * on after an update because the code hash changed.
+   */
+  accessibilityStale?: boolean
 }
