@@ -1,16 +1,30 @@
+import { adoptDockedWindow, dockedWeChat } from '../../src/dock/dockedSight.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
 import { parseWeChatPresence } from '../../src/dock/parse.ts'
-import { mergeVisibleSession, parseVisibleChatReport, pickVisibleTitle, type VisibleChatReport } from '../../src/dock/sessionReport.ts'
-import { DARWIN_APPLESCRIPT, DARWIN_VISIBLE_SCRIPT } from '../hostScripts.ts'
+import {
+  mergeVisibleSession,
+  parseVisibleChatReport,
+  pickVisibleTitle,
+  resolveChatTitle,
+  type VisibleChatReport,
+} from '../../src/dock/sessionReport.ts'
+import { DARWIN_APPLESCRIPT, DARWIN_ONSCREEN_SCRIPT, DARWIN_VISIBLE_SCRIPT } from '../hostScripts.ts'
 import { runCommand } from '../runCommand.ts'
 import type { AxView } from './axDriver.ts'
+import { readOcrChat } from './titleOcr.ts'
 
 /**
- * Docking already sees this window through System Events. Read that same
- * window even when Accessibility reports no AXWindows. The title comes from
- * the fast script; visible lines are best-effort and must not drop the title.
+ * Read the window the dock is using. When that poll already sees WeChat,
+ * do not apply a second hidden/minimized verdict that can drop the chat.
  */
-export async function readVisibleChat(): Promise<VisibleChatReport | null> {
+export async function readVisibleChat(onScreen = false): Promise<VisibleChatReport | null> {
+  if (onScreen) {
+    const rich = await runCommand('osascript', ['-e', DARWIN_ONSCREEN_SCRIPT], 3500)
+    const report = parseVisibleChatReport(rich.stdout)
+    if (!report || report === 'hidden') return null
+    const title = pickVisibleTitle(report.title, report.lines) || (report.title === '微信' ? '' : report.title)
+    return { title, lines: report.lines }
+  }
   const quick = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
   const presence = parseWeChatPresence(`${quick.stdout}\n${quick.stderr}`)
   if (presence.presence === 'hidden' || !presence.bounds) return null
@@ -30,4 +44,22 @@ export function applyVisibleChat(view: AxView, report: VisibleChatReport | null)
   if (!merged.hasWindow) return view
   const cleared = view.reason === 'no-window' || !view.hasWindow
   return { ...view, ...merged, reason: cleared ? '' : view.reason }
+}
+
+/** AX first, then the same on-screen window the dock found, then OCR. */
+export async function fillFromVisibleWindow(view: AxView): Promise<AxView> {
+  if (!view.trusted || !view.running) return view
+  const docked = dockedWeChat()
+  let next = view
+  const complete = view.hasWindow && Boolean(usableTitle(view.title)) && view.transcript.length > 0
+  if (!complete) next = applyVisibleChat(view, await readVisibleChat(Boolean(docked)))
+  if (!docked) return next
+  next = adoptDockedWindow(next, docked.title)
+  if (usableTitle(next.title) && next.transcript.length > 0) return next
+  const seen = await readOcrChat(docked.bounds)
+  const title =
+    resolveChatTitle({ windowTitle: next.title, visibleWindowTitle: docked.title, ocrTitle: seen.title }) || next.title
+  const transcript = next.transcript.length > 0 ? next.transcript : seen.lines
+  const missing = !next.hasWindow || next.reason === 'no-window'
+  return { ...next, hasWindow: true, title, transcript, reason: missing ? '' : next.reason }
 }

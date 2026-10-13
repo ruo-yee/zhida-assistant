@@ -21,7 +21,7 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
-import { applyVisibleChat, readVisibleChat } from './visibleSession.ts'
+import { fillFromVisibleWindow } from './visibleSession.ts'
 import {
   accountIdFromRoot,
   appSupportDir,
@@ -168,10 +168,7 @@ export class MacWeChatHost {
   }
 
   private async viewOfVisibleWindow(): Promise<AxView> {
-    const view = await runAx('inspect')
-    if (!view.trusted || !view.running) return view
-    if (view.hasWindow && usableTitle(view.title) && view.transcript.length > 0) return view
-    return applyVisibleChat(view, await readVisibleChat())
+    return fillFromVisibleWindow(await runAx('inspect'))
   }
 
   private statusFrom(view: AxView): HostBridgeStatus {
@@ -179,7 +176,7 @@ export class MacWeChatHost {
     if (!view.trusted) detail = accessibilityDetail(app.isPackaged)
     else if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
     else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = '微信在运行，但还读不到窗口。'
-    else if (!view.hasWindow || view.reason === 'no-window') detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
+    else if (!view.hasWindow) detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
     else detail = usableTitle(view.title) ? `已识别微信会话「${usableTitle(view.title)}」。` : '已连接微信，但没有读到当前会话标题。'
     return {
       platform: 'darwin',

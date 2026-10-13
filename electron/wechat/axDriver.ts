@@ -59,15 +59,21 @@ function perform(op, text, hostTrusted) {
     if (!pid) continue
     var root = $.AXUIElementCreateApplication(pid)
     $.AXUIElementSetMessagingTimeout(root, 0.5)
-    try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true) } catch (error) {}
+    try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), axBool(true)) } catch (error) {}
     delay(0.2)
-    located = mainWindow(pid, root)
-    if (located) break
+    var found = mainWindow(pid, root)
+    if (!found) continue
+    found.title = chatTitle(found)
+    if (!located) located = found
+    if (isRealTitle(found.title)) {
+      located = found
+      break
+    }
   }
   if (!located) return { ok: false, trusted: true, running: true, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'no-window' }
   var box = findInput(located.window)
   var composer = box ? axString(copyAttr(box, 'AXValue')) : null
-  var title = chatTitle(located)
+  var title = located.title || chatTitle(located)
   if (op === 'set' || op === 'clear') {
     if (!box) return { ok: false, trusted: true, running: true, hasWindow: true, windowId: located.id, title: title, hasTextArea: false, composer: null, transcript: [], reason: 'no-input' }
     var err = $.AXUIElementSetAttributeValue(box, $('AXValue'), $(op === 'clear' ? '' : text))
@@ -185,8 +191,13 @@ function findInput(window) {
   return best
 }
 
+function axBool(value) {
+  try { return $.NSNumber.numberWithBool(value ? true : false) } catch (error) { return $(value ? true : false) }
+}
+
 function mainWindow(pid, root) {
   var windows = liveWindows(asWindows(root))
+  if (!windows.length) windows = liveWindows(extraWindows(root))
   var cg = cgOwnedWindow(pid)
   if (cg && windows.length) {
     var matched = windows[0] || null
@@ -246,6 +257,19 @@ function largestAxWindow(windows) {
   }
   if (!best) return null
   return { window: best, title: bestTitle }
+}
+
+function extraWindows(root) {
+  var list = []
+  var focused = copyAttr(root, 'AXFocusedUIElement')
+  var via = focused ? copyAttr(focused, 'AXWindow') : null
+  if (via) list.push(via)
+  var kids = childrenOf(root)
+  for (var i = 0; i < kids.length; i++) {
+    var role = axString(copyAttr(kids[i], 'AXRole')) || ''
+    if (role === 'AXWindow') list.push(kids[i])
+  }
+  return list
 }
 
 function asWindows(root) {

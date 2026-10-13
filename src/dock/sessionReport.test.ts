@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { liveSession } from '../domain/wechat/liveSession.ts'
-import { mergeVisibleSession, parseVisibleChatReport, pickVisibleTitle, resolveChatTitle } from './sessionReport.ts'
+import {
+  conversationCrop,
+  mergeVisibleSession,
+  parseOcrObservations,
+  parseVisibleChatReport,
+  pickOcrChat,
+  pickVisibleTitle,
+  resolveChatTitle,
+} from './sessionReport.ts'
 
 describe('parseVisibleChatReport', () => {
   it('reads the System Events window name and visible lines', () => {
@@ -97,5 +105,47 @@ describe('resolveChatTitle', () => {
     })
     expect(session?.peerName).toBe('迈腾7连-3班')
     expect(session?.chatType).toBe('group')
+  })
+
+  it('uses OCR only after the window title, header, and selected row are empty', () => {
+    expect(
+      resolveChatTitle({
+        windowTitle: '微信',
+        headerTitle: '',
+        selectedTitle: '',
+        visibleWindowTitle: '微信',
+        ocrTitle: '迈腾7连-3班 (322)',
+      }),
+    ).toBe('迈腾7连-3班 (322)')
+    expect(resolveChatTitle({ windowTitle: '项目组 (4)', ocrTitle: '别的' })).toBe('项目组 (4)')
+  })
+})
+
+describe('pickOcrChat', () => {
+  it('reads the group header above the messages', () => {
+    const seen = pickOcrChat(
+      parseOcrObservations(
+        'LINE\t0.04\t迈腾7连—3班 (322)\nLINE\t0.08\t11条新消息\nLINE\t0.40\t好的\nLINE\t0.62\t宋哥，感觉我能给多少钱\n',
+      ),
+    )
+    expect(seen.title).toBe('迈腾7连—3班 (322)')
+    expect(seen.lines).toEqual(['好的', '宋哥，感觉我能给多少钱'])
+    const session = liveSession({
+      hasWindow: true,
+      title: seen.title,
+      transcript: seen.lines,
+      composerText: '',
+      db: null,
+    })
+    expect(session?.peerName).toBe('迈腾7连—3班')
+    expect(session?.chatType).toBe('group')
+  })
+
+  it('crops the conversation pane inside the docked window', () => {
+    const crop = conversationCrop({ x: 0, y: 111, width: 915, height: 693 })
+    expect(crop.x).toBeGreaterThanOrEqual(0)
+    expect(crop.y).toBeGreaterThanOrEqual(111)
+    expect(crop.x + crop.width).toBeLessThanOrEqual(915)
+    expect(crop.y + crop.height).toBeLessThanOrEqual(111 + 693)
   })
 })

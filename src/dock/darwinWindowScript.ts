@@ -145,7 +145,7 @@ function axWindowsMinimized(pids) {
     try {
       var root = $.AXUIElementCreateApplication(pids[i]);
       $.AXUIElementSetMessagingTimeout(root, 0.25);
-      try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true); } catch (error) {}
+      try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), $.NSNumber.numberWithBool(true)); } catch (error) {}
       var nodes = [];
       var mainWin = copyAttr(root, 'AXMainWindow');
       var focused = copyAttr(root, 'AXFocusedWindow');

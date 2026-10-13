@@ -11,16 +11,17 @@ export interface ChatTitleParts {
   headerTitle?: string
   selectedTitle?: string
   visibleWindowTitle?: string
+  ocrTitle?: string
 }
 
 /**
  * Chat name, keeping a member-count suffix such as ` (322)` so the session
  * can be marked 群聊. App-only names, clocks, and bare counts are skipped.
- * Order: AX window title, exact header, selected list row, then the System
- * Events window name. OCR is not a source.
+ * Order: AX window title, exact header, selected list row, System Events
+ * window name, then OCR. OCR runs only after the earlier sources are empty.
  */
 export function resolveChatTitle(parts: ChatTitleParts) {
-  const ordered = [parts.windowTitle, parts.headerTitle, parts.selectedTitle, parts.visibleWindowTitle]
+  const ordered = [parts.windowTitle, parts.headerTitle, parts.selectedTitle, parts.visibleWindowTitle, parts.ocrTitle]
   for (const candidate of ordered) {
     const title = realChatTitle(candidate ?? '')
     if (title) return title
@@ -83,7 +84,8 @@ export function pickVisibleLines(lines: string[], title: string) {
   for (const raw of lines) {
     const text = raw.replace(/\s+/g, ' ').trim()
     if (text.length < 2 || text.length > 180) continue
-    if (text === 'missing value' || CHROME.has(text) || skip.has(text) || skip.has(usableTitle(text))) continue
+    if (text === 'missing value' || CHROME.has(text) || text.includes('条新消息')) continue
+    if (skip.has(text) || skip.has(usableTitle(text))) continue
     if (GROUP_TITLE.test(text) && text.length <= 40) continue
     if (out.includes(text)) continue
     out.push(text)
@@ -103,4 +105,58 @@ export function mergeVisibleSession<T extends { hasWindow: boolean; title: strin
   const transcript = view.transcript.length > 0 ? view.transcript : pickVisibleLines(report.lines, title)
   // A report only exists when System Events sees an on-screen window.
   return { ...view, hasWindow: true, title, transcript }
+}
+
+/** First real chat name. A member-count suffix wins, so a group header beats a later line. */
+export function pickOcrTitle(lines: string[]) {
+  let fallback = ''
+  for (const line of lines) {
+    const title = realChatTitle(line)
+    if (!title) continue
+    if (GROUP_TITLE.test(title)) return title
+    if (!fallback) fallback = title
+  }
+  return fallback
+}
+
+export interface OcrObservation {
+  y: number
+  text: string
+}
+
+/** Header band first, then the rest of the capture. Y grows downward, 0–1. */
+export function pickOcrChat(observations: OcrObservation[]) {
+  const sorted = observations.filter((item) => item.text.trim()).sort((a, b) => a.y - b.y)
+  const header = sorted.filter((item) => item.y <= 0.16).map((item) => item.text)
+  const texts = sorted.map((item) => item.text)
+  const title = pickOcrTitle(header) || pickOcrTitle(texts)
+  return { title, lines: pickVisibleLines(texts, title) }
+}
+
+export function parseOcrObservations(stdout: string): OcrObservation[] {
+  const out: OcrObservation[] = []
+  for (const row of stdout.split(/\r?\n/)) {
+    if (!row.startsWith('LINE\t')) continue
+    const rest = row.slice(5)
+    const tab = rest.indexOf('\t')
+    if (tab < 0) continue
+    const y = Number(rest.slice(0, tab))
+    const text = rest.slice(tab + 1).trim()
+    if (!text || !Number.isFinite(y)) continue
+    out.push({ y, text })
+  }
+  return out
+}
+
+/** Conversation pane of a docked WeChat window, top-left origin, points. */
+export function conversationCrop(bounds: { x: number; y: number; width: number; height: number }) {
+  const left = Math.min(312, Math.max(bounds.width - 200, 0))
+  const width = Math.max(120, bounds.width - left - 24)
+  const height = Math.max(80, Math.min(bounds.height - 8, Math.round(bounds.height * 0.72)))
+  return {
+    x: Math.round(bounds.x + left),
+    y: Math.round(bounds.y + 2),
+    width: Math.round(Math.min(width, bounds.width - left)),
+    height: Math.round(height),
+  }
 }

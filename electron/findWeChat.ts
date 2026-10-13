@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
+import { noteWeChatSight } from '../src/dock/dockedSight.ts'
 import { listedWindowOutcome, parseWeChatSnapshot } from '../src/dock/wechatWindow.ts'
 import { dockWhenWindowLookupFails } from '../src/dock/hostTrust.ts'
 import { parseBoundsReport, parseWeChatPresence } from '../src/dock/parse.ts'
@@ -13,9 +14,10 @@ import { runCommand } from './runCommand.ts'
 import { wechatProcessAlive } from './wechat/processAlive.ts'
 
 export async function findWeChatWindow(platform = process.platform): Promise<FindOutcome> {
-  if (platform === 'darwin') return findDarwin()
-  if (platform === 'win32') return findWin32()
-  return { bounds: null, reason: 'unsupported-platform' }
+  const found =
+    platform === 'darwin' ? await findDarwin() : platform === 'win32' ? await findWin32() : { bounds: null, reason: 'unsupported-platform' as const }
+  noteWeChatSight(found)
+  return found
 }
 
 async function findDarwin(): Promise<FindOutcome> {

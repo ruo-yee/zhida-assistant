@@ -171,6 +171,82 @@ on swap(value, needle, replacement)
 end swap
 `
 
+/**
+ * Largest WeChat window, without a second minimized/hidden verdict.
+ * Call only when the dock poll already sees that window on screen.
+ * A false AXMinimized here used to drop the chat title and report no window.
+ */
+export const DARWIN_ONSCREEN_SCRIPT = `
+tell application "System Events"
+  set procNames to {"微信", "WeChat", "Weixin", "WeChatAppEx"}
+  set bestArea to 0
+  set bestTitle to ""
+  set bestLines to {}
+  repeat with procName in procNames
+    if exists (process procName) then
+      tell process procName
+        repeat with w in windows
+          try
+            set winSize to size of w
+            set winW to item 1 of winSize
+            set winH to item 2 of winSize
+            set area to winW * winH
+            if winW >= 240 and winH >= 240 and area > bestArea then
+              set bestArea to area
+              try
+                set bestTitle to name of w
+              end try
+              set bestLines to {}
+              try
+                set bestLines to value of every static text of w
+              end try
+            end if
+          end try
+        end repeat
+      end tell
+    end if
+  end repeat
+  if bestArea is 0 then return ""
+  set payload to "TITLE" & tab & bestTitle & linefeed
+  set total to 0
+  try
+    if class of bestLines is text then set bestLines to {bestLines}
+    set total to count of bestLines
+  end try
+  set startAt to 1
+  if total > 24 then set startAt to total - 23
+  if total > 0 then
+    repeat with i from startAt to total
+      try
+        set piece to item i of bestLines as text
+        set piece to my flatten(piece)
+        if (length of piece) >= 2 and (length of piece) < 180 then
+          set payload to payload & "LINE" & tab & piece & linefeed
+        end if
+      end try
+    end repeat
+  end if
+  return payload
+end tell
+
+on flatten(value)
+  set blob to value as text
+  set blob to my swap(blob, return, " ")
+  set blob to my swap(blob, linefeed, " ")
+  set blob to my swap(blob, tab, " ")
+  return blob
+end flatten
+
+on swap(value, needle, replacement)
+  set AppleScript's text item delimiters to needle
+  set parts to text items of value
+  set AppleScript's text item delimiters to replacement
+  set joined to parts as text
+  set AppleScript's text item delimiters to ""
+  return joined
+end swap
+`
+
 /** Win32 EnumWindows + GetWindowRect. Runs with powershell.exe on Windows. */
 export const WIN32_POWERSHELL = `
 $ErrorActionPreference = 'Stop'
