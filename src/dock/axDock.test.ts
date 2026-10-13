@@ -11,13 +11,14 @@ const blind: FindOutcome = {
 
 describe('dockOutcomeWithAx', () => {
   it('docks from System Events bounds when the window list cannot see WeChat', () => {
-    const ax = parseBoundsReport('0,111,915,693,微信\n')
-    const found = dockOutcomeWithAx(blind, ax)
-    expect(found).toEqual({
-      bounds: { x: 0, y: 111, width: 915, height: 693, title: '微信' },
-      reason: 'ok',
-    })
-    expect(found?.needsAccessibility).toBeUndefined()
+    for (const report of ['0,111,915,693,微信\n', '0,111,915,693']) {
+      const found = dockOutcomeWithAx(blind, parseBoundsReport(report), true)
+      expect(found).toEqual({
+        bounds: { x: 0, y: 111, width: 915, height: 693, title: '微信' },
+        reason: 'ok',
+      })
+      expect(found?.reason).not.toBe('screen-recording')
+    }
   })
 
   it('keeps a CoreGraphics hit and does not ask for both permissions when AppleScript misses', () => {
@@ -32,7 +33,10 @@ describe('dockOutcomeWithAx', () => {
       needsAccessibility: true,
     })
     expect(
-      dockOutcomeWithAx({ bounds: null, reason: 'screen-recording', needsAccessibility: false }, null)?.reason,
+      dockOutcomeWithAx({ bounds: null, reason: 'screen-recording', needsAccessibility: false }, null, true)?.reason,
     ).toBe('screen-recording')
+    expect(
+      dockOutcomeWithAx({ bounds: null, reason: 'screen-recording', needsAccessibility: false }, null, false)?.reason,
+    ).toBe('permission')
   })
 })

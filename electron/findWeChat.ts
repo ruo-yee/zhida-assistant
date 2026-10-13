@@ -37,8 +37,10 @@ async function findDarwin(): Promise<FindOutcome> {
   if (fromList?.reason === 'ok' && fromList.bounds) return fromList
 
   const hostTrusted = electronAccessibilityTrusted()
-  const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
-  const resolved = dockOutcomeWithAx(fromList, parseBoundsReport(ax.stdout))
+  const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 4000)
+  const axBounds = parseBoundsReport(`${ax.stdout}\n${ax.stderr}`)
+  const resolved = dockOutcomeWithAx(fromList, axBounds, hostTrusted)
+  if (resolved?.reason === 'ok') return resolved
   if (resolved) return resolved
 
   const blob = `${listed.stderr}\n${ax.stderr}`

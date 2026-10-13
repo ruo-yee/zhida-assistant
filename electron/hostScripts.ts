@@ -1,21 +1,38 @@
-/** System Events fallback when the CGWindow script cannot run. Position is top-left, same as Electron. */
+/**
+ * System Events fallback when CGWindowList cannot see WeChat.
+ * Position is top-left, same as Electron. A live window is `0,111,915,693,微信`.
+ * Title is optional so a bare `0,111,915,693` still docks.
+ */
 export const DARWIN_APPLESCRIPT = `
 tell application "System Events"
-  set procNames to {"WeChat", "微信", "Weixin"}
+  set procNames to {"微信", "WeChat", "Weixin", "WeChatAppEx"}
+  set bestArea to 0
+  set bestLine to ""
   repeat with procName in procNames
     if exists (process procName) then
       tell process procName
-        if (count of windows) > 0 then
-          set winPos to position of window 1
-          set winSize to size of window 1
-          set winTitle to name of window 1
-          return (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "," & (item 1 of winSize as text) & "," & (item 2 of winSize as text) & "," & winTitle
-        end if
+        repeat with w in windows
+          try
+            set winSize to size of w
+            set winW to item 1 of winSize
+            set winH to item 2 of winSize
+            set area to winW * winH
+            if winW >= 240 and winH >= 240 and area > bestArea then
+              set winPos to position of w
+              set winTitle to ""
+              try
+                set winTitle to name of w
+              end try
+              set bestArea to area
+              set bestLine to (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "," & (winW as text) & "," & (winH as text) & "," & winTitle
+            end if
+          end try
+        end repeat
       end tell
     end if
   end repeat
+  return bestLine
 end tell
-return ""
 `
 
 /** Win32 EnumWindows + GetWindowRect. Runs with powershell.exe on Windows. */

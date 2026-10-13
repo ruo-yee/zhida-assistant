@@ -55,7 +55,7 @@ describe('dockBanner', () => {
   })
 
   it('keeps a successful dock on one line, with the re-authorize hint only if insert still needs it', () => {
-    expect(dockBanner(dock({ mode: 'docked', detail: '已贴在微信右侧' }), null)).toEqual({
+    expect(dockBanner(dock({ mode: 'docked', detail: '已贴在微信右侧', needsScreenRecording: true }), null)).toEqual({
       tone: 'ok',
       title: '已贴在微信右侧',
       hint: '',

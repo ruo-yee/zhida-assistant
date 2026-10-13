@@ -2,17 +2,18 @@ import type { HostWindow } from './types.ts'
 
 export function parseBoundsLine(line: string): HostWindow | null {
   const trimmed = line.trim()
-  if (!trimmed) return null
-  const parts = trimmed.split(',')
-  if (parts.length < 5) return null
-  const [rawX, rawY, rawWidth, rawHeight, ...titleParts] = parts
-  const x = Number(rawX)
-  const y = Number(rawY)
-  const width = Number(rawWidth)
-  const height = Number(rawHeight)
+  if (!trimmed || trimmed.startsWith('{')) return null
+  const match = trimmed.match(
+    /^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(.*))?$/,
+  )
+  if (!match) return null
+  const x = Number(match[1])
+  const y = Number(match[2])
+  const width = Number(match[3])
+  const height = Number(match[4])
   if (![x, y, width, height].every(Number.isFinite)) return null
   if (width < 80 || height < 80) return null
-  return { x, y, width, height, title: titleParts.join(',').trim() }
+  return { x, y, width, height, title: (match[5] ?? '').trim() || '微信' }
 }
 
 export function parseBoundsReport(stdout: string): HostWindow | null {

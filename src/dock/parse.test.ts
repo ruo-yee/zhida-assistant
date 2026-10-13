@@ -18,6 +18,13 @@ describe('parseBoundsReport', () => {
     expect(parseBoundsReport(report)?.title).toBe('微信')
     expect(parseBoundsReport('')).toBeNull()
     expect(parseBoundsReport('not-a-window')).toBeNull()
+    expect(parseBoundsReport('0,111,915,693')).toEqual({
+      x: 0,
+      y: 111,
+      width: 915,
+      height: 693,
+      title: '微信',
+    })
   })
 
   it('recognizes an assistive-access failure', () => {
