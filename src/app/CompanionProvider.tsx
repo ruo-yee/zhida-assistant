@@ -11,7 +11,7 @@ import {
 import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
-import { recentChatTurns } from '../domain/reply/chatContext.ts'
+import { rememberOutbound, turnsWithOutbound, type PendingOutbound } from '../domain/reply/chatContext.ts'
 import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
 import {
   cleanPrompt,
@@ -193,6 +193,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const regenToken = useRef(0)
   const toastTimer = useRef<number | null>(null)
   const trackedRef = useRef<WeChatSession | null>(null)
+  const outboundRef = useRef<PendingOutbound[]>([])
   const seenCustomer = useRef<string | null>(null)
 
   const retrieverRef = useRef(createKnowledgeRetriever())
@@ -308,6 +309,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       try {
         const active = trackedRef.current ?? (await bridge.getActiveSession())
         if (token !== tokenRef.current) return
+        const merged = turnsWithOutbound(active.id, active.messages, outboundRef.current)
+        outboundRef.current = merged.pending
         const customer = active.messages.filter((message) => message.role === 'customer')
         const latest = customer.at(-1)?.text ?? ''
         if (fail) {
@@ -331,7 +334,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           personaText: personaPrompt(activePersona.id, settingsRef.current.customPersonas),
           intent: intentNow,
           customerText: latest,
-          turns: recentChatTurns(active.messages),
+          turns: merged.turns,
           grounding,
           hits: found,
         })
@@ -364,6 +367,18 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     [bridge],
   )
 
+  const noteOutbound = useCallback(
+    (text: string) => {
+      const active = trackedRef.current ?? bridge.getSnapshot()
+      outboundRef.current = rememberOutbound(outboundRef.current, {
+        sessionId: active.id,
+        anchorId: active.messages.at(-1)?.id ?? '',
+        text,
+      })
+    },
+    [bridge],
+  )
+
   const lastCustomerId = useMemo(() => {
     for (let index = focusSession.messages.length - 1; index >= 0; index -= 1) {
       const message = focusSession.messages[index]
@@ -391,13 +406,14 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         if (!result.ok) return
       }
     }
+    noteOutbound(text)
     await bridge.insertText(text)
     try {
       navigator.vibrate?.(12)
     } catch {
       /* vibration is optional */
     }
-  }, [bridge, notify])
+  }, [bridge, noteOutbound, notify])
 
   const sendSuggestion = useCallback(async () => {
     if (editing) return
@@ -411,12 +427,13 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
         if (!result.ok) return
       }
     }
+    noteOutbound(text)
     setSendState('sent')
     setWechatSending(true)
     await bridge.sendText(text)
     window.setTimeout(() => setWechatSending(false), 600)
     window.setTimeout(() => setSendState('idle'), 1200)
-  }, [bridge, editing, notify])
+  }, [bridge, editing, noteOutbound, notify])
 
   const sendComposer = useCallback(async () => {
     const text = bridge.getSnapshot().composerText.trim()
@@ -582,6 +599,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     simulateError: () => void runPipeline({ fail: true }),
     resetSession: () => {
       forceErrorRef.current = false
+      const mockId = bridge.getSnapshot().id
+      outboundRef.current = outboundRef.current.filter((item) => item.sessionId !== mockId)
       bridge.reset()
       setSearchOpen(false)
       setSearchQuery('')
