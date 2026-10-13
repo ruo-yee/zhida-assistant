@@ -7,6 +7,7 @@ import type { DockStatus } from '../src/dock/types.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
 import { classifyDroppedPath, indexLibraryFolder } from '../src/domain/knowledge/folderIndex.ts'
 import { electronAccessibilityTrusted, promptForAccessibilityOnce } from './accessibility.ts'
+import { redockAfterGrant } from '../src/domain/wechat/accessibilityCopy.ts'
 import { findWeChatWindow } from './findWeChat.ts'
 import { readModelKey, writeModelKey } from './modelKey.ts'
 import { openPrivacyPane } from './openPrivacy.ts'
@@ -28,6 +29,7 @@ let pausedUntil = 0
 let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
 let seenWeChat = false
+let axTrustedSeen = false
 const accessibilityName = process.platform === 'darwin' ? (app.isPackaged ? '智答助手' : 'Electron') : ''
 let status: DockStatus = {
   mode: 'searching',
@@ -133,6 +135,11 @@ async function tick() {
   if (!mainWindow || ticking) return
   ticking = true
   try {
+    if (process.platform === 'darwin') {
+      const trusted = electronAccessibilityTrusted()
+      if (redockAfterGrant(axTrustedSeen, trusted)) pausedUntil = 0
+      axTrustedSeen = trusted
+    }
     const found = await findWeChatWindow()
     const visibility = followWeChatVisibility({
       seen: seenWeChat,

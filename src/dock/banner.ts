@@ -1,4 +1,4 @@
-import { STALE_ACCESS_COPY } from '../domain/wechat/accessibilityCopy.ts'
+import { accessibilityGrantGuide, STALE_ACCESS_COPY, staleGrantHint } from '../domain/wechat/accessibilityCopy.ts'
 import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
 import type { DockStatus } from './types.ts'
 
@@ -17,22 +17,23 @@ export function dockBanner(status: DockStatus | null, bridge: HostBridgeStatus |
   const needAx = darwin && Boolean(status?.needsAccessibility || bridge?.needsAccessibility)
   const stale = Boolean(status?.accessibilityStale) && needAx
   const name = status?.accessibilityName || bridge?.accessibilityName || ''
-  const axTitle = stale ? STALE_ACCESS_COPY : '需要辅助功能权限才能贴到微信'
+  const guide = accessibilityGrantGuide(name)
   if (status?.mode === 'docked') {
     const peer = bridge?.session?.peerName
     const sessionHint = !needAx && peer && peer !== '当前微信' ? `会话「${peer}」` : ''
     return {
       tone: 'ok',
       title: status.detail,
-      hint: needAx ? axTitle : sessionHint,
+      hint: needAx ? (stale ? STALE_ACCESS_COPY : guide.hint) : sessionHint,
       primary: needAx ? 'accessibility' : null,
     }
   }
   if (needAx) {
+    const extra = [stale ? staleGrantHint(name) : guide.hint, needScreen ? '屏幕录制可以稍后打开' : '']
     return {
       tone: 'warn',
-      title: axTitle,
-      hint: stale ? (needScreen ? '屏幕录制可以稍后打开' : '') : name ? `打开「${name}」` : '',
+      title: stale ? STALE_ACCESS_COPY : guide.title,
+      hint: extra.filter(Boolean).join(' '),
       primary: 'accessibility',
     }
   }

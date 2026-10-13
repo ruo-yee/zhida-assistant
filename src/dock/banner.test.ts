@@ -39,13 +39,21 @@ describe('dockBanner', () => {
       }),
       bridge,
     )
-    expect(banner).toEqual({
+    expect(banner).toMatchObject({
       tone: 'warn',
       title: STALE_ACCESS_COPY,
-      hint: '屏幕录制可以稍后打开',
       primary: 'accessibility',
     })
+    expect(banner?.hint).toContain('拖进去')
+    expect(banner?.hint).toContain('屏幕录制可以稍后打开')
     expect(banner?.title).not.toContain('需要屏幕录制')
+  })
+
+  it('explains that Accessibility cannot be granted automatically', () => {
+    const banner = dockBanner(dock({ needsAccessibility: true, detail: '需要辅助功能权限才能贴到微信' }), bridge)
+    expect(banner).toMatchObject({ tone: 'warn', title: 'macOS 不能自动授权', primary: 'accessibility' })
+    expect(banner?.hint).toContain('把「智答助手」拖进辅助功能列表')
+    expect(banner?.hint).toContain('打开开关')
   })
 
   it('asks only for screen recording when Accessibility is already trusted', () => {

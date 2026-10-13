@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
 import { MODEL_PAGE_FIELDS, SETTINGS_SECTIONS, type ModelPageFieldId } from '../app/settingsSections.ts'
-import { GATEKEEPER_NOTE } from '../domain/wechat/accessibilityCopy.ts'
+import { accessibilityGrantGuide, GATEKEEPER_NOTE } from '../domain/wechat/accessibilityCopy.ts'
 import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
 import { cleanName, CUSTOM_PERSONA_LIMIT } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
@@ -355,7 +355,9 @@ function LookSettings() {
         <>
           <h3>辅助功能</h3>
           <p className="hint">
-            贴边或写入输入框需要授权时，点下面的按钮即可打开系统设置。打包后的列表名是「智答助手」，开发运行时是「Electron」。允许后会自动继续。
+            {accessibilityGrantGuide('智答助手').title}。点下面打开辅助功能设置。
+            {accessibilityGrantGuide('智答助手').hint}
+            开发运行时，列表里的名字是「Electron」。
           </p>
           <div className="persona-actions">
             <Button variant="outline" size="sm" onClick={() => void window.zhida?.openAccessibilitySettings()}>

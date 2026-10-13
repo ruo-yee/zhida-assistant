@@ -50,7 +50,10 @@ export function DockStatusBar() {
   }
 
   return (
-    <div className={`dock-status is-${banner.tone}`} role="status">
+    <div
+      className={`dock-status is-${banner.tone}${banner.primary === 'accessibility' ? ' is-auth' : ''}`}
+      role="status"
+    >
       <span className="dock-dot" />
       <span className="dock-copy">
         <span>{banner.title}</span>
