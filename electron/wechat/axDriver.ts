@@ -47,18 +47,23 @@ function perform(op, text, hostTrusted) {
   if (!trusted) {
     try { trusted = $.AXIsProcessTrusted() ? true : false } catch (error) { trusted = false }
   }
-  var app = null
-  try { app = findWeChat() } catch (error) { app = null }
-  var running = !!app
+  var apps = []
+  try { apps = wechatApps() } catch (error) { apps = [] }
+  var running = apps.length > 0
   if (!trusted) return { ok: false, trusted: false, running: running, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'need-ax' }
-  if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'not-running' }
-  var pid = 0
-  try { pid = Number(ObjC.unwrap(app.processIdentifier)) } catch (error) { pid = Number(app.processIdentifier) }
-  var root = $.AXUIElementCreateApplication(pid)
-  $.AXUIElementSetMessagingTimeout(root, 0.5)
-  try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true) } catch (error) {}
-  delay(0.2)
-  var located = mainWindow(pid, root)
+  if (!running) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'not-running' }
+  var located = null
+  for (var a = 0; a < apps.length; a++) {
+    var pid = 0
+    try { pid = Number(ObjC.unwrap(apps[a].processIdentifier)) } catch (error) { pid = Number(apps[a].processIdentifier) }
+    if (!pid) continue
+    var root = $.AXUIElementCreateApplication(pid)
+    $.AXUIElementSetMessagingTimeout(root, 0.5)
+    try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true) } catch (error) {}
+    delay(0.2)
+    located = mainWindow(pid, root)
+    if (located) break
+  }
   if (!located) return { ok: false, trusted: true, running: true, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, transcript: [], reason: 'no-window' }
   var box = findInput(located.window)
   var composer = box ? axString(copyAttr(box, 'AXValue')) : null
@@ -90,23 +95,28 @@ function nsText(value) {
 }
 
 function findWeChat() {
-  var apps = $.NSWorkspace.sharedWorkspace.runningApplications
+  var apps = wechatApps()
+  return apps.length ? apps[0] : null
+}
+
+function wechatApps() {
+  var running = $.NSWorkspace.sharedWorkspace.runningApplications
   var names = { '微信': 1, WeChat: 1, Weixin: 1, WeChatAppEx: 1 }
   var bundles = {
     'com.tencent.xinWeChat': 1,
     'com.tencent.xinWeChat.WeChatAppEx': 1,
     'com.tencent.flue.WeChatAppEx': 1
   }
-  var preferred = null
-  var fallback = null
-  for (var i = 0; i < apps.count; i++) {
-    var app = apps.objectAtIndex(i)
+  var preferred = []
+  var rest = []
+  for (var i = 0; i < running.count; i++) {
+    var app = running.objectAtIndex(i)
     var bid = nsText(app.bundleIdentifier)
     var name = nsText(app.localizedName)
-    if (bid === 'com.tencent.xinWeChat') preferred = app
-    else if (!fallback && (bundles[bid] || names[name])) fallback = app
+    if (bid === 'com.tencent.xinWeChat') preferred.push(app)
+    else if (bundles[bid] || names[name]) rest.push(app)
   }
-  return preferred || fallback
+  return preferred.concat(rest)
 }
 
 function copyAttr(el, name) {
@@ -176,7 +186,7 @@ function findInput(window) {
 }
 
 function mainWindow(pid, root) {
-  var windows = asWindows(root)
+  var windows = liveWindows(asWindows(root))
   var cg = cgOwnedWindow(pid)
   if (cg && windows.length) {
     var matched = windows[0] || null
@@ -191,7 +201,7 @@ function mainWindow(pid, root) {
   // WeChat 4: CGWindowList is empty for osascript, and AXWindows count is 0.
   // AXFocusedWindow or AXMainWindow still exists after AXManualAccessibility.
   var focused = copyAttr(root, 'AXFocusedWindow') || copyAttr(root, 'AXMainWindow')
-  if (!focused) return null
+  if (!focused || windowMinimized(focused)) return null
   var focusedTitle = axString(copyAttr(focused, 'AXTitle')) || ''
   return { window: focused, id: cg ? cg.id : 'ax-focus', cgName: (cg && cg.name) || focusedTitle }
 }
@@ -225,6 +235,7 @@ function largestAxWindow(windows) {
   var bestArea = 0
   var bestTitle = ''
   for (var i = 0; i < windows.length; i++) {
+    if (windowMinimized(windows[i])) continue
     var size = axSize(windows[i])
     if (!size || size.w < 240 || size.h < 240) continue
     var area = size.w * size.h
@@ -245,61 +256,149 @@ function asWindows(root) {
   return list
 }
 
+function liveWindows(windows) {
+  var live = []
+  for (var i = 0; i < windows.length; i++) {
+    if (!windowMinimized(windows[i])) live.push(windows[i])
+  }
+  return live
+}
+
+function windowMinimized(el) {
+  if (!el) return false
+  var mini = copyAttr(el, 'AXMinimized')
+  try { mini = ObjC.unwrap(mini) } catch (error) {}
+  if (mini === true || mini === 1 || mini === '1' || mini === 'true') return true
+  var sub = axString(copyAttr(el, 'AXSubrole')) || ''
+  return sub === 'AXMinimizedWindow'
+}
+
 function chatTitle(located) {
-  var names = { '微信': 1, WeChat: 1, Weixin: 1 }
-  var title = located.window ? axString(copyAttr(located.window, 'AXTitle')) || '' : ''
-  if (title && !names[title]) return title
-  var found = findHeader(located.window)
-  if (found) return found
-  if (located.cgName && !names[located.cgName]) return located.cgName
-  return ''
+  // Window title, then the exact header, then the selected row.
+  // Screen-capture OCR is not used. 「微信」 is the app name, not a chat.
+  var windowTitle = isRealTitle(located.window ? (axString(copyAttr(located.window, 'AXTitle')) || '') : '')
+  if (windowTitle) return windowTitle
+  var header = findHeader(located.window)
+  if (header) return header
+  var selected = selectedRowTitle(located.window)
+  if (selected) return selected
+  return isRealTitle(located.cgName || '')
+}
+
+function isRealTitle(value) {
+  var raw = cleanLine(value)
+  if (!raw) return ''
+  var stripped = raw.replace(/\\s*[(（]\\s*\\d{1,5}\\s*[)）]?\\s*$/g, '').trim()
+  if (!stripped || stripped === '微信' || stripped === 'WeChat' || stripped === 'Weixin') return ''
+  if (stripped === '用 AI 处理' || stripped === '用AI处理' || stripped === '图片预览' || stripped === 'Preview') return ''
+  if (/^\\d{1,5}$/.test(stripped) || /^\\d{1,2}:\\d{2}$/.test(stripped)) return ''
+  return raw
 }
 
 function findHeader(window) {
   if (!window) return ''
-  var named = textByIdentifier(window, { big_title_line_h_view: 1, title_view: 1, chat_title: 1 })
-  if (named) return named
-  var frame = axPoint(window)
-  if (!frame) return ''
-  var best = ''
-  var bestY = -1
-  var queue = [window]
+  var queue = [{ el: window, depth: 0 }]
   var seen = 0
-  while (queue.length && seen < 2500) {
-    var el = queue.shift()
-    seen += 1
-    var role = axString(copyAttr(el, 'AXRole')) || ''
-    if (role === 'AXStaticText') {
-      var value = cleanLine(axString(copyAttr(el, 'AXValue')) || axString(copyAttr(el, 'AXTitle')) || '')
-      var box = axPoint(el)
-      if (value && value.length <= 40 && box && frame.w > 0 && !isChrome(value)) {
-        var onRight = box.x > frame.x + frame.w * 0.22
-        var onTop = box.y > frame.y + frame.h * 0.82
-        if (onRight && onTop && box.y >= bestY) {
-          best = value
-          bestY = box.y
-        }
-      }
-    }
-    var kids = childrenOf(el)
-    for (var i = 0; i < kids.length; i++) queue.push(kids[i])
-  }
-  return best
-}
-
-function textByIdentifier(window, names) {
-  var queue = [window]
-  var seen = 0
-  while (queue.length && seen < 3000) {
-    var el = queue.shift()
+  while (queue.length && seen < 120) {
+    var item = queue.shift()
+    var el = item.el
+    if (!el) continue
     seen += 1
     var ident = axString(copyAttr(el, 'AXIdentifier')) || ''
-    if (names[ident]) {
-      var value = cleanLine(axString(copyAttr(el, 'AXValue')) || axString(copyAttr(el, 'AXTitle')) || '')
-      if (value) return value
+    var role = axString(copyAttr(el, 'AXRole')) || ''
+    if (ident === 'big_title_line_h_view' && role === 'AXStaticText') {
+      var raw = axString(copyAttr(el, 'AXValue')) || ''
+      if (!cleanLine(raw)) raw = axString(copyAttr(el, 'AXTitle')) || ''
+      return isRealTitle(raw)
     }
+    if (item.depth >= 8) continue
     var kids = childrenOf(el)
-    for (var i = 0; i < kids.length; i++) queue.push(kids[i])
+    for (var i = 0; i < kids.length; i++) queue.push({ el: kids[i], depth: item.depth + 1 })
+  }
+  return ''
+}
+
+function selectedRowTitle(window) {
+  if (!window) return ''
+  var outline = ''
+  var other = ''
+  var seen = 0
+  function walk(el, depth) {
+    if (!el || depth > 8 || seen > 120 || outline) return
+    seen += 1
+    var role = axString(copyAttr(el, 'AXRole')) || ''
+    var rows = copyAttr(el, 'AXSelectedRows')
+    if ((role === 'AXOutline' || role === 'AXTable' || role === 'AXList') && rows && typeof rows.count === 'number') {
+      var limit = Math.min(rows.count, 4)
+      for (var i = 0; i < limit; i++) {
+        var title = rowVisibleTitle(rows.objectAtIndex(i))
+        if (!title) continue
+        if (role === 'AXOutline') {
+          outline = title
+          return
+        }
+        if (!other) other = title
+      }
+    }
+    var selected = copyAttr(el, 'AXSelected')
+    try { selected = ObjC.unwrap(selected) } catch (error) {}
+    if ((selected === true || selected === 1) && (role === 'AXRow' || role === 'AXOutlineRow')) {
+      var picked = rowVisibleTitle(el)
+      if (picked) {
+        if (role === 'AXOutlineRow') {
+          outline = picked
+          return
+        }
+        if (!other) other = picked
+      }
+    }
+    if (outline || depth >= 8) return
+    var kids = childrenOf(el)
+    for (var k = 0; k < kids.length; k++) {
+      walk(kids[k], depth + 1)
+      if (outline) return
+    }
+  }
+  walk(window, 0)
+  return outline || other
+}
+
+function rowVisibleTitle(row) {
+  if (!row) return ''
+  var own = firstRealTitle([
+    axString(copyAttr(row, 'AXTitle')),
+    axString(copyAttr(row, 'AXDescription')),
+    axString(copyAttr(row, 'AXValue'))
+  ])
+  if (own) return own
+  return rowChildTitle(row, 0)
+}
+
+function rowChildTitle(el, depth) {
+  if (!el || depth > 3) return ''
+  var kids = childrenOf(el)
+  var limit = Math.min(kids.length, 12)
+  for (var i = 0; i < limit; i++) {
+    var child = kids[i]
+    var role = axString(copyAttr(child, 'AXRole')) || ''
+    if (role === 'AXStaticText' || role === 'AXTextField' || role === 'AXButton' || role === 'AXCell' || role === '') {
+      var title = firstRealTitle([
+        axString(copyAttr(child, 'AXTitle')),
+        axString(copyAttr(child, 'AXDescription')),
+        axString(copyAttr(child, 'AXValue'))
+      ])
+      if (title) return title
+    }
+    var nested = rowChildTitle(child, depth + 1)
+    if (nested) return nested
+  }
+  return ''
+}
+
+function firstRealTitle(values) {
+  for (var i = 0; i < values.length; i++) {
+    var title = isRealTitle(values[i] || '')
+    if (title) return title
   }
   return ''
 }

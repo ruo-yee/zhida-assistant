@@ -21,6 +21,7 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
+import { applyVisibleChat, readVisibleChat } from './visibleSession.ts'
 import {
   accountIdFromRoot,
   appSupportDir,
@@ -70,7 +71,7 @@ export class MacWeChatHost {
   }
 
   private async inspect(): Promise<HostBridgeStatus> {
-    const view = await runAx('inspect')
+    const view = await this.viewOfVisibleWindow()
     const base = this.statusFrom(view)
     if (!view.running || !view.trusted || !view.hasWindow) return base
     const composerText = view.composer?.trim() ?? ''
@@ -116,7 +117,7 @@ export class MacWeChatHost {
   }
 
   private async insert(text: string): Promise<HostActionResult> {
-    const view = await runAx('inspect')
+    const view = await this.viewOfVisibleWindow()
     const plan = planInsert(toComposer(view), text)
     if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
     if (plan.action !== 'set') return handled(false, '没有可插入的内容')
@@ -138,7 +139,7 @@ export class MacWeChatHost {
   }
 
   private async send(text: string): Promise<HostActionResult> {
-    const view = await runAx('inspect')
+    const view = await this.viewOfVisibleWindow()
     const plan = planSend(toComposer(view), text)
     if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
     if (plan.action === 'return') return this.pressReturn(view, plan.text)
@@ -164,6 +165,13 @@ export class MacWeChatHost {
     } finally {
       this.guard.finish('return', view.windowId, text, sent, Date.now())
     }
+  }
+
+  private async viewOfVisibleWindow(): Promise<AxView> {
+    const view = await runAx('inspect')
+    if (!view.trusted || !view.running) return view
+    if (view.hasWindow && usableTitle(view.title) && view.transcript.length > 0) return view
+    return applyVisibleChat(view, await readVisibleChat())
   }
 
   private statusFrom(view: AxView): HostBridgeStatus {

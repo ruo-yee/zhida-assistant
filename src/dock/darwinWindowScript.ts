@@ -12,7 +12,7 @@ export function darwinWeChatWindowScript() {
   var bundles = ${bundles};
   var exactNames = ${names};
   function fail(message) {
-    return JSON.stringify({ error: message, pids: [], names: [], selfPid: Number(argv[0] || 0), windows: [], axTrusted: null, axBounds: null, appHidden: false });
+    return JSON.stringify({ error: message, pids: [], names: [], selfPid: Number(argv[0] || 0), windows: [], axTrusted: null, axBounds: null, appHidden: false, concealed: false });
   }
   function nsString(value) {
     if (value === null || value === undefined) return '';
@@ -72,45 +72,105 @@ export function darwinWeChatWindowScript() {
   }
   var appHidden = mainStates.length > 0 && mainStates.indexOf(0) < 0;
   var windows = [];
+  var onScreenCount = 0;
+  var anywhereCount = 0;
   try {
-    var opts = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
-    var raw = $.CGWindowListCopyWindowInfo(opts, $.kCGNullWindowID);
-    var list = [];
-    try { list = asArray(ObjC.deepUnwrap(raw)); } catch (error) { list = asArray(raw); }
-    if (!list.length) list = asArray(raw);
-    for (var w = 0; w < list.length; w++) {
-      var win = list[w];
-      if (!win) continue;
-      var bounds = win.kCGWindowBounds || {};
-      windows.push({
-        pid: Number(win.kCGWindowOwnerPID || 0),
-        layer: Number(win.kCGWindowLayer || 0),
-        x: Number(bounds.X || bounds.x || 0),
-        y: Number(bounds.Y || bounds.y || 0),
-        width: Number(bounds.Width || bounds.width || 0),
-        height: Number(bounds.Height || bounds.height || 0),
-        title: String(win.kCGWindowName || ''),
-        owner: String(win.kCGWindowOwnerName || ''),
-        id: Number(win.kCGWindowNumber || 0)
-      });
-    }
+    windows = readWindowList(true);
+    onScreenCount = countWeChatWindows(windows, pids, nameSet);
+    anywhereCount = countWeChatWindows(readWindowList(false), pids, nameSet);
   } catch (error) {
     return fail('window-list-failed');
   }
+  var cgBlind = onScreenCount === 0 && anywhereCount === 0;
+  var offscreen = !cgBlind && onScreenCount === 0 && anywhereCount > 0;
+  var axMinimized = !appHidden && onScreenCount === 0 ? axWindowsMinimized(pids) : false;
+  var concealed = appHidden || offscreen || axMinimized;
   var hostTrusted = String(argv[1] || '') === '1';
   var ax = hasDockable(pids, nameSet, windows) ? { trusted: null, bounds: null } : probeAx(pids, hostTrusted);
-  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: ax.trusted, axBounds: ax.bounds, appHidden: appHidden });
+  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: ax.trusted, axBounds: ax.bounds, appHidden: appHidden, concealed: concealed });
+}
+function readWindowList(onScreenOnly) {
+  var opts = onScreenOnly ? ($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements) : 0;
+  var raw = $.CGWindowListCopyWindowInfo(opts, $.kCGNullWindowID);
+  var list = [];
+  try { list = asArray(ObjC.deepUnwrap(raw)); } catch (error) { list = asArray(raw); }
+  if (!list.length) list = asArray(raw);
+  var windows = [];
+  for (var w = 0; w < list.length; w++) {
+    var win = list[w];
+    if (!win) continue;
+    var bounds = win.kCGWindowBounds || {};
+    windows.push({
+      pid: Number(win.kCGWindowOwnerPID || 0),
+      layer: Number(win.kCGWindowLayer || 0),
+      x: Number(bounds.X || bounds.x || 0),
+      y: Number(bounds.Y || bounds.y || 0),
+      width: Number(bounds.Width || bounds.width || 0),
+      height: Number(bounds.Height || bounds.height || 0),
+      title: String(win.kCGWindowName || ''),
+      owner: String(win.kCGWindowOwnerName || ''),
+      id: Number(win.kCGWindowNumber || 0)
+    });
+  }
+  return windows;
+}
+function countWeChatWindows(windows, pids, nameSet) {
+  var set = {};
+  for (var i = 0; i < pids.length; i++) set[pids[i]] = 1;
+  var count = 0;
+  for (var n = 0; n < windows.length; n++) {
+    var win = windows[n];
+    if (Number(win.layer) !== 0 || Number(win.width) < 240 || Number(win.height) < 240) continue;
+    if (set[win.pid] || nameSet[win.owner]) count += 1;
+  }
+  return count;
 }
 function isAppHidden(app) {
   try {
-    var value = app.hidden;
-    if (typeof value === 'function') value = app.isHidden();
-    var flag = value;
-    try { flag = ObjC.unwrap(value); } catch (error) {}
-    return flag === true || flag === 1;
+    var flag = false;
+    if (typeof app.isHidden === 'function') flag = app.isHidden();
+    else if (typeof app.hidden === 'function') flag = app.hidden();
+    else flag = app.hidden;
+    try { flag = ObjC.unwrap(flag); } catch (error) {}
+    return flag === true || flag === 1 || flag === '1';
   } catch (error) {
     return false;
   }
+}
+function axWindowsMinimized(pids) {
+  try { ObjC.import('ApplicationServices'); } catch (error) { return false; }
+  var saw = false;
+  var visible = false;
+  for (var i = 0; i < pids.length; i++) {
+    try {
+      var root = $.AXUIElementCreateApplication(pids[i]);
+      $.AXUIElementSetMessagingTimeout(root, 0.25);
+      try { $.AXUIElementSetAttributeValue(root, $('AXManualAccessibility'), true); } catch (error) {}
+      var nodes = [];
+      var mainWin = copyAttr(root, 'AXMainWindow');
+      var focused = copyAttr(root, 'AXFocusedWindow');
+      if (mainWin) nodes.push(mainWin);
+      if (focused) nodes.push(focused);
+      var raw = copyAttr(root, 'AXWindows');
+      if (raw && typeof raw.count === 'number') {
+        var limit = Math.min(raw.count, 6);
+        for (var n = 0; n < limit; n++) nodes.push(raw.objectAtIndex(n));
+      }
+      for (var k = 0; k < nodes.length; k++) {
+        saw = true;
+        if (!axMinimized(nodes[k])) visible = true;
+      }
+    } catch (error) {}
+  }
+  return saw && !visible;
+}
+function axMinimized(el) {
+  var mini = copyAttr(el, 'AXMinimized');
+  try { mini = ObjC.unwrap(mini); } catch (error) {}
+  if (mini === true || mini === 1 || mini === '1' || mini === 'true') return true;
+  var sub = '';
+  try { sub = String(ObjC.unwrap(copyAttr(el, 'AXSubrole')) || ''); } catch (error) { sub = ''; }
+  return sub === 'AXMinimizedWindow';
 }
 function hasDockable(pids, nameSet, windows) {
   var set = {};
@@ -145,6 +205,7 @@ function probeAx(pids, hostTrusted) {
         var pos = readPoint(win);
         var size = readSize(win);
         if (!pos || !size || size.w < 240 || size.h < 240) continue;
+        if (axMinimized(win)) continue;
         var area = size.w * size.h;
         if (!best || area > best.area) best = { x: pos.x, y: pos.y, width: size.w, height: size.h, area: area };
       }

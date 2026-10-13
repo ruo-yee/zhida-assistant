@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
-import { parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
+import { listedWindowOutcome, parseWeChatSnapshot } from '../src/dock/wechatWindow.ts'
 import { dockWhenWindowLookupFails } from '../src/dock/hostTrust.ts'
 import { parseBoundsReport, parseWeChatPresence } from '../src/dock/parse.ts'
 import { resolveWeChatVisibility } from '../src/dock/wechatVisibility.ts'
@@ -35,11 +35,11 @@ async function findDarwin(): Promise<FindOutcome> {
   const snapshot = parseWeChatSnapshot(listed.stdout)
   let fromList: FindOutcome | null = null
   if (snapshot) {
-    const picked = selectWeChatWindow(snapshot)
-    // An on-screen window docks immediately. Cmd+H sets appHidden and must
-    // not fall through to a stale System Events frame.
+    const picked = listedWindowOutcome(snapshot)
+    // On-screen bounds dock immediately. Minimized, Cmd+H, or off-screen
+    // WeChat is hidden here, before a stale System Events frame can dock.
     if (picked.bounds) return picked
-    if (snapshot.appHidden) return { bounds: null, reason: 'hidden' }
+    if (picked.reason === 'hidden') return picked
     fromList = picked
   }
 

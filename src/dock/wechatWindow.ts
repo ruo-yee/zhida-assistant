@@ -33,6 +33,12 @@ export interface WeChatWindowSnapshot {
   axBounds: { x: number; y: number; width: number; height: number } | null
   /** Main WeChat app is hidden with Cmd+H. Helpers alone do not set this. */
   appHidden: boolean
+  /**
+   * Cmd+H, a window that exists only off-screen, or AX windows that are all
+   * minimized. Both CoreGraphics lists being empty is not concealed: WeChat 4
+   * often omits itself there while System Events can still dock.
+   */
+  concealed: boolean
   error?: string
 }
 
@@ -81,6 +87,7 @@ export function parseWeChatSnapshot(stdout: string): WeChatWindowSnapshot | null
       axTrusted?: unknown
       axBounds?: unknown
       appHidden?: unknown
+      concealed?: unknown
       error?: unknown
     }
     const windows = Array.isArray(raw.windows) ? raw.windows : []
@@ -115,6 +122,7 @@ export function parseWeChatSnapshot(stdout: string): WeChatWindowSnapshot | null
       axTrusted: raw.axTrusted === null || raw.axTrusted === undefined ? null : Boolean(raw.axTrusted),
       axBounds: axBounds && axBounds.width > 0 && axBounds.height > 0 ? axBounds : null,
       appHidden: Boolean(raw.appHidden),
+      concealed: Boolean(raw.concealed),
       error: raw.error ? String(raw.error) : undefined,
     }
   } catch {
@@ -189,4 +197,23 @@ export function selectWeChatWindow(snapshot: WeChatWindowSnapshot): FindOutcome 
     return { bounds: null, reason: 'permission', needsAccessibility: true }
   }
   return { bounds: null, reason: 'hidden' }
+}
+
+function hasOnScreenWeChat(snapshot: WeChatWindowSnapshot) {
+  const pids = new Set(snapshot.pids)
+  const owners = new Set<string>(WECHAT_OWNER_NAMES)
+  return snapshot.windows.some((win) => isDockable(win) && isWeChatWindow(win, pids, owners))
+}
+
+/**
+ * On-screen CoreGraphics bounds dock immediately, including when the session
+ * title is still being read. Concealed (Cmd+H, off-screen-only, or minimized)
+ * hides the companion and must not be replaced by a stale Accessibility frame.
+ * A CoreGraphics miss is left for System Events.
+ */
+export function listedWindowOutcome(snapshot: WeChatWindowSnapshot): FindOutcome {
+  const picked = selectWeChatWindow(snapshot)
+  if (picked.bounds && hasOnScreenWeChat(snapshot)) return picked
+  if (snapshot.appHidden || snapshot.concealed) return { bounds: null, reason: 'hidden' }
+  return picked
 }

@@ -3,6 +3,7 @@ import { darwinWeChatWindowScript } from './darwinWindowScript.ts'
 import {
   electronBoundsFromAppKit,
   electronBoundsFromQuartz,
+  listedWindowOutcome,
   parseWeChatSnapshot,
   selectWeChatWindow,
   type ListedWindow,
@@ -30,6 +31,7 @@ function snapshot(partial: Partial<WeChatWindowSnapshot> = {}): WeChatWindowSnap
     axTrusted: null,
     axBounds: null,
     appHidden: false,
+    concealed: false,
     ...partial,
   }
 }
@@ -139,6 +141,67 @@ describe('selectWeChatWindow', () => {
     const parsed = parseWeChatSnapshot('noise\n{"pids":[10],"names":["微信"],"selfPid":9,"windows":[],"axTrusted":false,"axBounds":null}\n')
     expect(parsed?.pids).toEqual([10])
     expect(parsed?.axTrusted).toBe(false)
+    expect(parsed?.concealed).toBe(false)
+    expect(parseWeChatSnapshot('{"pids":[10],"concealed":true,"appHidden":false,"windows":[]}')?.concealed).toBe(true)
+  })
+})
+
+describe('listedWindowOutcome', () => {
+  it('docks an on-screen window and does not treat it as hidden', () => {
+    const found = listedWindowOutcome(
+      snapshot({
+        pids: [10],
+        windows: [win({ pid: 10, x: 12, y: 40, width: 900, height: 700, title: '迈腾7连-3班 (322)' })],
+      }),
+    )
+    expect(found.reason).toBe('ok')
+    expect(found.bounds?.title).toBe('迈腾7连-3班 (322)')
+  })
+
+  it('keeps an on-screen window even if another signal says concealed', () => {
+    const found = listedWindowOutcome(
+      snapshot({
+        concealed: true,
+        pids: [10],
+        windows: [win({ pid: 10, width: 800, height: 600 })],
+      }),
+    )
+    expect(found.reason).toBe('ok')
+    expect(found.bounds?.width).toBe(800)
+  })
+
+  it('hides a minimized or Cmd+H window instead of using a stale Accessibility frame', () => {
+    expect(
+      listedWindowOutcome(
+        snapshot({
+          concealed: true,
+          pids: [10],
+          axTrusted: true,
+          axBounds: { x: 0, y: 111, width: 915, height: 693 },
+        }),
+      ),
+    ).toEqual({ bounds: null, reason: 'hidden' })
+    expect(
+      listedWindowOutcome(
+        snapshot({
+          appHidden: true,
+          pids: [10],
+          axBounds: { x: 0, y: 111, width: 915, height: 693 },
+        }),
+      ).reason,
+    ).toBe('hidden')
+  })
+
+  it('still docks from Accessibility when CoreGraphics missed a visible window', () => {
+    const found = listedWindowOutcome(
+      snapshot({
+        pids: [10],
+        axTrusted: true,
+        axBounds: { x: 40, y: 60, width: 880, height: 640 },
+      }),
+    )
+    expect(found.reason).toBe('ok')
+    expect(found.bounds?.width).toBe(880)
   })
 })
 
@@ -149,6 +212,10 @@ describe('darwinWeChatWindowScript', () => {
     expect(script).toContain('AXIsProcessTrusted')
     expect(script).toContain('appHidden')
     expect(script).toContain('function isAppHidden')
+    expect(script).toContain('concealed')
+    expect(script).toContain('function axWindowsMinimized')
+    expect(script).toContain('AXMinimizedWindow')
+    expect(script).toContain('readWindowList(false)')
     expect(script).not.toContain('AXTrustedCheckOptionPrompt')
   })
 })

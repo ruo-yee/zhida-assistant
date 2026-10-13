@@ -16,16 +16,29 @@ tell application "System Events"
       tell process procName
         set appVisible to true
         try
-          set appVisible to visible
+          set visFlag to visible
+          if visFlag is false or visFlag is 0 then set appVisible to false
+          if (visFlag as text) is "false" or (visFlag as text) is "0" then set appVisible to false
         end try
         if appVisible then
           repeat with w in windows
             try
-              set minimized to false
+              set winConcealed to false
               try
-                set minimized to (value of attribute "AXMinimized" of w) as boolean
+                set miniValue to value of attribute "AXMinimized" of w
+                if miniValue is true or miniValue is 1 then set winConcealed to true
+                if winConcealed is false then
+                  set miniText to miniValue as text
+                  if miniText is "true" or miniText is "1" then set winConcealed to true
+                end if
               end try
-              if minimized is false then
+              try
+                if winConcealed is false then
+                  set subrole to (value of attribute "AXSubrole" of w) as text
+                  if subrole is "AXMinimizedWindow" then set winConcealed to true
+                end if
+              end try
+              if winConcealed is false then
                 set winSize to size of w
                 set winW to item 1 of winSize
                 set winH to item 2 of winSize
@@ -50,6 +63,112 @@ tell application "System Events"
   if sawProcess then return "hidden"
   return ""
 end tell
+`
+
+/**
+ * Same visible window as docking, plus the static texts System Events can see.
+ * Used when Accessibility's AXWindows / AXFocusedWindow are empty on WeChat 4.
+ * A group window name looks like `迈腾7连-3班 (322)`.
+ */
+export const DARWIN_VISIBLE_SCRIPT = `
+tell application "System Events"
+  set procNames to {"微信", "WeChat", "Weixin", "WeChatAppEx"}
+  set bestArea to 0
+  set bestTitle to ""
+  set bestLines to {}
+  set sawProcess to false
+  repeat with procName in procNames
+    if exists (process procName) then
+      set sawProcess to true
+      tell process procName
+        set appVisible to true
+        try
+          set visFlag to visible
+          if visFlag is false or visFlag is 0 then set appVisible to false
+          if (visFlag as text) is "false" or (visFlag as text) is "0" then set appVisible to false
+        end try
+        if appVisible then
+          repeat with w in windows
+            try
+              set winConcealed to false
+              try
+                set miniValue to value of attribute "AXMinimized" of w
+                if miniValue is true or miniValue is 1 then set winConcealed to true
+                if winConcealed is false then
+                  set miniText to miniValue as text
+                  if miniText is "true" or miniText is "1" then set winConcealed to true
+                end if
+              end try
+              try
+                if winConcealed is false then
+                  set subrole to (value of attribute "AXSubrole" of w) as text
+                  if subrole is "AXMinimizedWindow" then set winConcealed to true
+                end if
+              end try
+              if winConcealed is false then
+                set winSize to size of w
+                set winW to item 1 of winSize
+                set winH to item 2 of winSize
+                set area to winW * winH
+                if winW >= 240 and winH >= 240 and area > bestArea then
+                  set bestArea to area
+                  try
+                    set bestTitle to name of w
+                  end try
+                  set bestLines to {}
+                  try
+                    set bestLines to value of every static text of w
+                  end try
+                end if
+              end if
+            end try
+          end repeat
+        end if
+      end tell
+    end if
+  end repeat
+  if bestArea is 0 then
+    if sawProcess then return "HIDDEN"
+    return ""
+  end if
+  set payload to "TITLE" & tab & bestTitle & linefeed
+  set total to 0
+  try
+    if class of bestLines is text then set bestLines to {bestLines}
+    set total to count of bestLines
+  end try
+  set startAt to 1
+  if total > 24 then set startAt to total - 23
+  if total > 0 then
+    repeat with i from startAt to total
+      try
+        set piece to item i of bestLines as text
+        set piece to my flatten(piece)
+        if (length of piece) >= 2 and (length of piece) < 180 then
+          set payload to payload & "LINE" & tab & piece & linefeed
+        end if
+      end try
+    end repeat
+  end if
+  return payload
+end tell
+
+on flatten(value)
+  set blob to value as text
+  set blob to my swap(blob, return, " ")
+  set blob to my swap(blob, linefeed, " ")
+  set blob to my swap(blob, tab, " ")
+  return blob
+end flatten
+
+on swap(value, needle, replacement)
+  set AppleScript's text item delimiters to needle
+  set parts to text items of value
+  set AppleScript's text item delimiters to replacement
+  set joined to parts as text
+  set AppleScript's text item delimiters to ""
+  return joined
+end swap
 `
 
 /** Win32 EnumWindows + GetWindowRect. Runs with powershell.exe on Windows. */
