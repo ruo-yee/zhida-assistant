@@ -124,7 +124,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           <div className="reply-wrap fade-in">
             {app.variants.length > 0 ? (
               <div className="candidates" role="radiogroup" aria-label="回复候选">
-                <p className="candidate-hint">点一条候选，或在下面改完再插入。发送仍要再点一次。</p>
+                <p className="candidate-hint">按当前会话的最近消息起草。点一条候选，或在下面改完再插入。发送仍要再点一次。</p>
                 {app.variants.map((text, index) => (
                   <button
                     key={`${index}-${text.slice(0, 24)}`}

@@ -1,6 +1,8 @@
 import path from 'node:path'
 import { homedir } from 'node:os'
+import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
+import { accessibilityClientName, needAccessibilityReason } from '../../src/domain/wechat/accessibilityCopy.ts'
 import type { WeChatMessage, WeChatSession } from '../../src/domain/wechat/WeChatBridge.ts'
 import {
   NEED_AX,
@@ -111,7 +113,7 @@ export class MacWeChatHost {
   private async insert(text: string): Promise<HostActionResult> {
     const view = await runAx('inspect')
     const plan = planInsert(toComposer(view), text)
-    if (plan.action === 'refuse') return handled(false, plan.reason)
+    if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
     if (plan.action !== 'set') return handled(false, '没有可插入的内容')
     const claimed = this.guard.claim('insert', view.windowId, plan.text, Date.now())
     if (!claimed.ok) return handled(false, claimed.reason)
@@ -133,7 +135,7 @@ export class MacWeChatHost {
   private async send(text: string): Promise<HostActionResult> {
     const view = await runAx('inspect')
     const plan = planSend(toComposer(view), text)
-    if (plan.action === 'refuse') return handled(false, plan.reason)
+    if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
     if (plan.action === 'return') return this.pressReturn(view, plan.text)
     const inserted = await this.insert(plan.text)
     if (!inserted.ok) return inserted
@@ -162,7 +164,7 @@ export class MacWeChatHost {
   private statusFrom(view: AxView): HostBridgeStatus {
     let detail = '正在检查微信…'
     if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
-    else if (!view.trusted) detail = NEED_AX
+    else if (!view.trusted) detail = needAccessibilityReason(accessibilityClientName(app.isPackaged))
     else if (!view.hasWindow) detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
     else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = view.reason
     else detail = usableTitle(view.title) ? `已识别微信会话「${usableTitle(view.title)}」。` : '已连接微信，但没有读到当前会话标题。'
@@ -172,6 +174,7 @@ export class MacWeChatHost {
       axTrusted: view.trusted,
       wechatRunning: view.running,
       dbReady: false,
+      needsAccessibility: !view.trusted && view.running && view.reason === 'need-ax',
       detail,
       session: null,
     }
@@ -321,6 +324,11 @@ function titleSession(title: string): WeChatSession | null {
 
 function handled(ok: boolean, reason: string): HostActionResult {
   return { ok, handled: true, reason }
+}
+
+function refuseReason(reason: string) {
+  if (reason !== NEED_AX) return reason
+  return needAccessibilityReason(accessibilityClientName(app.isPackaged))
 }
 
 function clock(seconds: number) {

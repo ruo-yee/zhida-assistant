@@ -1,34 +1,4 @@
-/** CoreGraphics window list. Runs with `osascript -l JavaScript` on macOS. */
-export const DARWIN_CGWINDOW_SCRIPT = `
-ObjC.import('CoreGraphics');
-const opts = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
-const raw = $.CGWindowListCopyWindowInfo(opts, $.kCGNullWindowID);
-const list = ObjC.deepUnwrap(raw) || [];
-let best = null;
-for (let i = 0; i < list.length; i++) {
-  const win = list[i];
-  if (!win || win.kCGWindowLayer !== 0) continue;
-  const owner = String(win.kCGWindowOwnerName || '');
-  const name = String(win.kCGWindowName || '');
-  if (!/WeChat|Weixin|微信/.test(owner) && !/WeChat|Weixin|微信/.test(name)) continue;
-  const bounds = win.kCGWindowBounds;
-  if (!bounds) continue;
-  const width = Number(bounds.Width);
-  const height = Number(bounds.Height);
-  if (!(width >= 240 && height >= 240)) continue;
-  const area = width * height;
-  if (!best || area > best.area) {
-    best = { x: Number(bounds.X), y: Number(bounds.Y), width: width, height: height, title: name || owner, area: area };
-  }
-}
-if (!best) {
-  '';
-} else {
-  best.x + ',' + best.y + ',' + best.width + ',' + best.height + ',' + String(best.title).replace(/[\\r\\n]/g, ' ');
-}
-`
-
-/** Accessibility fallback when CGWindowList cannot see the WeChat process. */
+/** System Events fallback when the CGWindow script cannot run. Position is top-left, same as Electron. */
 export const DARWIN_APPLESCRIPT = `
 tell application "System Events"
   set procNames to {"WeChat", "微信", "Weixin"}

@@ -16,10 +16,13 @@ export function SettingsDialog() {
   const customCount = app.personas.filter((item) => !item.builtin).length
   return (
     <Dialog open={app.settingsOpen} onOpenChange={app.setSettingsOpen}>
-      <DialogContent title="设置" description="角色和语气只改回复草稿。插入到微信和一键发送都要你再点一次。">
+      <DialogContent
+        title="设置"
+        description="角色和语气只改回复草稿。模型看到的上下文是当前微信会话的最近消息；知识摘录只在对得上时附上。插入和发送都要你再点一次。"
+      >
         {window.zhida ? (
           <p className="hint">
-            桌面窗口会贴在微信右侧，并跟着微信移动。macOS 需在「系统设置 → 隐私与安全性 → 辅助功能」里允许智答助手，才能读取当前会话并写入输入框。数据库密钥放在本机 keys.json，程序只读打开，不会写回微信。
+            贴边或写入输入框需要授权时，用窗口里的「打开辅助功能设置」或「打开屏幕录制设置」。打包后的列表名是「智答助手」，开发运行时是「Electron」。允许后会自动继续。密钥只留在本机，不会写回微信。
           </p>
         ) : null}
         <h3>人设</h3>

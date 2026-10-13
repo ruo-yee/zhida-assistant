@@ -1,4 +1,4 @@
-export const NEED_AX = '插入需要辅助功能权限。请到「系统设置 → 隐私与安全性 → 辅助功能」允许智答助手。'
+export const NEED_AX = '需要辅助功能权限才能贴到微信'
 export const SEND_DEDUPE_MS = 3000
 
 const BREAKS = new Set(['\r', '\n', '\t', '\u0085', '\u2028', '\u2029'])

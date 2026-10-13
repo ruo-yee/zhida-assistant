@@ -3,6 +3,7 @@ import { buildChatVariants } from './chatReplies.ts'
 import { buildMockVariants } from './mockReplies.ts'
 import { completeOpenAI, type ModelConfig } from './openaiReply.ts'
 import { fillThree } from './parseReplies.ts'
+import type { ChatTurn } from './chatContext.ts'
 import type { PersonaVoice } from './personas.ts'
 
 export type ReplyGrounding = 'grounded' | 'chat'
@@ -13,6 +14,8 @@ export interface ReplyInput {
   personaText: string
   intent: IntentLabel
   customerText: string
+  /** Recent WeChat messages. This is 上下文 for the model, not the knowledge hits. */
+  turns?: ChatTurn[]
   grounding: ReplyGrounding
   hits: Array<Pick<KnowledgeHit, 'id' | 'title' | 'version' | 'excerpt' | 'score'>>
 }

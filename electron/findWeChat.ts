@@ -1,9 +1,12 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
+import { electronBoundsFromQuartz, parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
 import { isAssistivePermissionError, parseBoundsReport } from '../src/dock/parse.ts'
 import type { FindOutcome } from '../src/dock/types.ts'
-import { DARWIN_APPLESCRIPT, DARWIN_CGWINDOW_SCRIPT, WIN32_POWERSHELL } from './hostScripts.ts'
+import { electronAccessibilityTrusted } from './accessibility.ts'
+import { DARWIN_APPLESCRIPT, WIN32_POWERSHELL } from './hostScripts.ts'
 import { runCommand } from './runCommand.ts'
 
 export async function findWeChatWindow(platform = process.platform): Promise<FindOutcome> {
@@ -13,17 +16,31 @@ export async function findWeChatWindow(platform = process.platform): Promise<Fin
 }
 
 async function findDarwin(): Promise<FindOutcome> {
-  const cg = await runCommand('osascript', ['-l', 'JavaScript', '-e', DARWIN_CGWINDOW_SCRIPT])
-  const fromCg = parseBoundsReport(cg.stdout)
-  if (fromCg) return { bounds: fromCg, reason: 'ok' }
+  const listed = await runCommand(
+    'osascript',
+    [
+      '-l',
+      'JavaScript',
+      '-e',
+      darwinWeChatWindowScript(),
+      '--',
+      String(process.pid),
+      electronAccessibilityTrusted() ? '1' : '0',
+    ],
+    4000,
+  )
+  const snapshot = parseWeChatSnapshot(listed.stdout)
+  if (snapshot) return selectWeChatWindow(snapshot)
 
-  const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT])
+  const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
   const fromAx = parseBoundsReport(ax.stdout)
-  if (fromAx) return { bounds: fromAx, reason: 'ok' }
+  if (fromAx) return { bounds: electronBoundsFromQuartz(fromAx), reason: 'ok' }
 
-  if (isAssistivePermissionError(`${cg.stderr}\n${ax.stderr}`)) return { bounds: null, reason: 'permission' }
-  if (/ENOENT/i.test(`${cg.stderr} ${ax.stderr}`)) return { bounds: null, reason: 'error' }
-  return { bounds: null, reason: 'not-running' }
+  if (isAssistivePermissionError(`${listed.stderr}\n${ax.stderr}`)) {
+    return { bounds: null, reason: 'permission', needsAccessibility: true }
+  }
+  if (/ENOENT/i.test(`${listed.stderr} ${ax.stderr}`)) return { bounds: null, reason: 'error' }
+  return { bounds: null, reason: 'error' }
 }
 
 async function findWin32(): Promise<FindOutcome> {

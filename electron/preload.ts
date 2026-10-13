@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('zhida', {
   platform: process.platform,
   getDockStatus: (): Promise<DockStatus> => ipcRenderer.invoke('dock:get-status'),
   reattach: (): Promise<DockStatus> => ipcRenderer.invoke('dock:reattach'),
+  openAccessibilitySettings: (): Promise<boolean> => ipcRenderer.invoke('accessibility:open-settings'),
+  openScreenRecordingSettings: (): Promise<boolean> => ipcRenderer.invoke('screen:open-settings'),
   onDockStatus: (callback: (status: DockStatus) => void) => {
     const listener = (_event: IpcRendererEvent, status: DockStatus) => callback(status)
     ipcRenderer.on('dock:status', listener)

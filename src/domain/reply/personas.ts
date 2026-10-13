@@ -59,7 +59,7 @@ export const CUSTOM_PERSONA_LIMIT = 12
 export const TONE_HINT: Record<Persona, string> = {
   professional: '语气专业、简明，先给结论，适合直接发到微信。',
   warm: '语气亲切，先接住对方，再给结论。',
-  technical: '保留必要的机制说明，但不编造摘录或对话里没有的数字。',
+  technical: '保留必要的机制说明，但不编造当前会话或知识摘录里没有的数字。',
 }
 
 export function createPersonaId() {

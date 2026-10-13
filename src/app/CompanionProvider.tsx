@@ -11,6 +11,7 @@ import {
 import { classifyIntent } from '../domain/intent.ts'
 import { CORPUS } from '../domain/knowledge/corpus.ts'
 import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
+import { recentChatTurns } from '../domain/reply/chatContext.ts'
 import { groundingFor, createReplyGenerator } from '../domain/reply/ReplyGenerator.ts'
 import {
   cleanPrompt,
@@ -317,6 +318,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           personaText: personaPrompt(activePersona.id, settingsRef.current.customPersonas),
           intent: intentNow,
           customerText: latest,
+          turns: recentChatTurns(active.messages),
           grounding,
           hits: visibleHits,
         })

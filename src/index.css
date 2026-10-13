@@ -128,6 +128,24 @@ button { cursor: pointer; }
 .dock-status.is-docked .dock-dot { background: var(--brand); }
 .dock-status.is-floating .dock-dot { background: #e6a23c; }
 .dock-status.is-searching .dock-dot { background: var(--plane); }
+.dock-status.is-auth { flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; }
+.dock-copy { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 12rem; }
+.dock-hint { color: var(--muted); }
+.dock-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.dock-action {
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+}
+.dock-action.is-quiet {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
 .avatar-svg { width: 36px; height: 36px; display: block; border-radius: 50%; }
 .avatar-wrap { position: relative; flex: none; }
 .online-dot {

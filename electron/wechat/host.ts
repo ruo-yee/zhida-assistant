@@ -23,6 +23,7 @@ class IdleWeChatHost implements WeChatHost {
       axTrusted: false,
       wechatRunning: false,
       dbReady: false,
+      needsAccessibility: false,
       detail: this.detail,
       session: null,
     }

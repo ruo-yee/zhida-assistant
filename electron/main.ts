@@ -3,9 +3,11 @@ import path from 'node:path'
 import { boundsNearlyEqual, computeDockBounds } from '../src/dock/bounds.ts'
 import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
-import { findWeChatWindow } from './findWeChat.ts'
-import { createWeChatHost } from './wechat/host.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
+import { promptForAccessibilityOnce } from './accessibility.ts'
+import { findWeChatWindow } from './findWeChat.ts'
+import { openPrivacyPane } from './openPrivacy.ts'
+import { createWeChatHost } from './wechat/host.ts'
 
 // Containers and some Linux desktops cannot install Chromium's setuid sandbox.
 if (process.platform === 'linux') {
@@ -18,14 +20,18 @@ const preferredWidth = 440
 const dev = process.argv.includes('--dev')
 
 let mainWindow: BrowserWindow | null = null
-let programmatic = false
+let moveLocks = 0
 let pausedUntil = 0
 let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
+const accessibilityName = process.platform === 'darwin' ? (app.isPackaged ? '智答助手' : 'Electron') : ''
 let status: DockStatus = {
   mode: 'searching',
   platform: process.platform,
   detail: '正在查找微信窗口…',
+  needsAccessibility: false,
+  needsScreenRecording: false,
+  accessibilityName,
 }
 const wechatHost = createWeChatHost()
 let wechatStatus: HostBridgeStatus = {
@@ -34,30 +40,53 @@ let wechatStatus: HostBridgeStatus = {
   axTrusted: false,
   wechatRunning: false,
   dbReady: false,
+  needsAccessibility: false,
+  accessibilityName,
   detail: '正在检查微信…',
   session: null,
 }
 let wechatTimer: ReturnType<typeof setInterval> | null = null
 let wechatTicking = false
 
-function publish(next: DockStatus) {
-  if (next.mode === status.mode && next.detail === status.detail && next.side === status.side) return
-  status = next
-  mainWindow?.webContents.send('dock:status', status)
+function nameDock(next: DockStatus): DockStatus {
+  if (!accessibilityName) return next
+  return { ...next, accessibilityName }
 }
 
-function publishWeChat(next: HostBridgeStatus) {
+function publish(next: DockStatus) {
+  const named = nameDock(next)
   if (
-    next.detail === wechatStatus.detail &&
-    next.available === wechatStatus.available &&
-    next.dbReady === wechatStatus.dbReady &&
-    next.session?.id === wechatStatus.session?.id &&
-    next.session?.messages.at(-1)?.id === wechatStatus.session?.messages.at(-1)?.id
+    named.mode === status.mode &&
+    named.detail === status.detail &&
+    named.side === status.side &&
+    named.needsAccessibility === status.needsAccessibility &&
+    named.needsScreenRecording === status.needsScreenRecording &&
+    named.accessibilityName === status.accessibilityName
   ) {
     return
   }
-  wechatStatus = next
+  status = named
+  mainWindow?.webContents.send('dock:status', status)
+  if (named.needsAccessibility) promptForAccessibilityOnce()
+}
+
+function publishWeChat(next: HostBridgeStatus) {
+  const named = accessibilityName ? { ...next, accessibilityName } : next
+  if (
+    named.detail === wechatStatus.detail &&
+    named.available === wechatStatus.available &&
+    named.dbReady === wechatStatus.dbReady &&
+    named.axTrusted === wechatStatus.axTrusted &&
+    named.needsAccessibility === wechatStatus.needsAccessibility &&
+    named.accessibilityName === wechatStatus.accessibilityName &&
+    named.session?.id === wechatStatus.session?.id &&
+    named.session?.messages.at(-1)?.id === wechatStatus.session?.messages.at(-1)?.id
+  ) {
+    return
+  }
+  wechatStatus = named
   mainWindow?.webContents.send('wechat:status', wechatStatus)
+  if (named.needsAccessibility) promptForAccessibilityOnce()
 }
 
 async function pollWeChat() {
@@ -75,11 +104,11 @@ async function pollWeChat() {
 function place(bounds: { x: number; y: number; width: number; height: number }) {
   if (!mainWindow) return
   if (boundsNearlyEqual(mainWindow.getBounds(), bounds)) return
-  programmatic = true
+  moveLocks += 1
   mainWindow.setBounds(bounds)
   setTimeout(() => {
-    programmatic = false
-  }, 80)
+    moveLocks = Math.max(0, moveLocks - 1)
+  }, 300)
 }
 
 function centerFloating() {
@@ -101,7 +130,13 @@ async function tick() {
     const found = await findWeChatWindow()
     if (!found.bounds) {
       const wasFloating = status.mode === 'floating'
-      publish(describeDock({ platform: process.platform, reason: found.reason }))
+      publish(
+        describeDock({
+          platform: process.platform,
+          reason: found.reason,
+          needsAccessibility: found.needsAccessibility,
+        }),
+      )
       if (!wasFloating) centerFloating()
       return
     }
@@ -141,7 +176,13 @@ function createWindow() {
   win.setAlwaysOnTop(true, 'floating')
   if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.on('move', () => {
-    if (!programmatic && status.mode === 'docked') pausedUntil = Date.now() + 1600
+    if (moveLocks > 0 || status.mode !== 'docked') return
+    pausedUntil = Date.now() + 1600
+  })
+  win.on('focus', () => {
+    pausedUntil = 0
+    void tick()
+    void pollWeChat()
   })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
@@ -170,6 +211,8 @@ if (!app.requestSingleInstanceLock()) {
       await tick()
       return status
     })
+    ipcMain.handle('accessibility:open-settings', () => openPrivacyPane('accessibility'))
+    ipcMain.handle('screen:open-settings', () => openPrivacyPane('screen'))
     ipcMain.handle('wechat:get-status', () => wechatStatus)
     ipcMain.handle('wechat:insert', (_event, text: string) => wechatHost.insertText(String(text ?? '')))
     ipcMain.handle('wechat:send', (_event, text: string) => wechatHost.sendText(String(text ?? '')))

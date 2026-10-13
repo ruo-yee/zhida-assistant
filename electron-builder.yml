@@ -29,6 +29,8 @@ mac:
         - arm64
   extendInfo:
     NSAppleEventsUsageDescription: 智答助手需要读取微信窗口的位置，以便贴在聊天窗口右侧。
+    NSAccessibilityUsageDescription: 智答助手需要辅助功能权限，才能在系统没有列出窗口时读取微信位置，并把草稿写入输入框。不会自动发送。
+    NSScreenCaptureUsageDescription: 智答助手需要屏幕录制权限，才能在系统隐藏其它应用窗口时读取微信的位置。不会录制或上传画面。
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 win:

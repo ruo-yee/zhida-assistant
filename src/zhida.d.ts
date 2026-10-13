@@ -7,6 +7,8 @@ declare global {
       platform: string
       getDockStatus: () => Promise<DockStatus>
       reattach: () => Promise<DockStatus>
+      openAccessibilitySettings: () => Promise<boolean>
+      openScreenRecordingSettings: () => Promise<boolean>
       onDockStatus: (callback: (status: DockStatus) => void) => () => void
       wechat?: {
         getStatus: () => Promise<HostBridgeStatus>

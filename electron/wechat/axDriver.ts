@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { electronAccessibilityTrusted } from '../accessibility.ts'
 
 export interface AxView {
   trusted: boolean
@@ -18,7 +19,7 @@ const SCRIPT = `
 function run(argv) {
   ObjC.import('ApplicationServices')
   ObjC.import('Cocoa')
-  var payload = { op: 'inspect', text: '' }
+  var payload = { op: 'inspect', text: '', hostTrusted: false }
   try {
     if (argv[0]) {
       payload = JSON.parse(ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError($(argv[0]), $.NSUTF8StringEncoding, null)))
@@ -27,14 +28,15 @@ function run(argv) {
     return JSON.stringify({ ok: false, reason: '辅助功能调用失败' })
   }
   try {
-    return JSON.stringify(perform(payload.op || 'inspect', String(payload.text || '')))
+    return JSON.stringify(perform(payload.op || 'inspect', String(payload.text || ''), payload.hostTrusted ? true : false))
   } catch (error) {
     return JSON.stringify({ ok: false, reason: '辅助功能调用失败' })
   }
 }
 
-function perform(op, text) {
-  var trusted = $.AXIsProcessTrusted() ? true : false
+function perform(op, text, hostTrusted) {
+  var osTrusted = $.AXIsProcessTrusted() ? true : false
+  var trusted = (osTrusted || hostTrusted) ? true : false
   var app = findWeChat()
   if (!trusted) return { ok: false, trusted: false, running: !!app, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'need-ax' }
   if (!app) return { ok: false, trusted: true, running: false, hasWindow: false, windowId: '', title: '', hasTextArea: false, composer: null, reason: 'not-running' }
@@ -254,7 +256,11 @@ export async function runAx(op: 'inspect' | 'set' | 'clear' | 'return', text = '
   const dir = await mkdtemp(path.join(tmpdir(), 'zhida-ax-payload-'))
   const payloadPath = path.join(dir, 'payload.json')
   try {
-    await writeFile(payloadPath, JSON.stringify({ op, text }), { encoding: 'utf8', mode: 0o600 })
+    await writeFile(
+      payloadPath,
+      JSON.stringify({ op, text, hostTrusted: electronAccessibilityTrusted() }),
+      { encoding: 'utf8', mode: 0o600 },
+    )
     const result = await runOsascript(await scriptFile(), payloadPath)
     const parsed = parseAx(result.stdout)
     if (parsed) return parsed
