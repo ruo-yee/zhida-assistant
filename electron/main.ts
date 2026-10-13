@@ -152,7 +152,7 @@ async function tick() {
           needsAccessibility: found.needsAccessibility,
         }),
       )
-      if (!wasFloating) centerFloating()
+      if (!wasFloating && !visibility.hide) centerFloating()
       return
     }
     if (Date.now() < pausedUntil) return

@@ -38,6 +38,10 @@ describe('WeChat session reader when CoreGraphics is empty', () => {
   it('still docks from System Events when the window-list snapshot has no bounds', () => {
     const finder = readFileSync('electron/findWeChat.ts', 'utf8')
     expect(finder).toContain('if (picked.bounds) return picked')
+    expect(finder).toContain('snapshot.appHidden')
     expect(finder).toContain('DARWIN_APPLESCRIPT')
+    const script = readFileSync('electron/hostScripts.ts', 'utf8')
+    expect(script).toContain('AXMinimized')
+    expect(script).toContain('return "hidden"')
   })
 })

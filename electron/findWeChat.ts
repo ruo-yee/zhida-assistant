@@ -1,11 +1,11 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { dockOutcomeWithAx } from '../src/dock/axDock.ts'
 import { darwinWeChatWindowScript } from '../src/dock/darwinWindowScript.ts'
 import { parseWeChatSnapshot, selectWeChatWindow } from '../src/dock/wechatWindow.ts'
 import { dockWhenWindowLookupFails } from '../src/dock/hostTrust.ts'
-import { parseBoundsReport } from '../src/dock/parse.ts'
+import { parseBoundsReport, parseWeChatPresence } from '../src/dock/parse.ts'
+import { resolveWeChatVisibility } from '../src/dock/wechatVisibility.ts'
 import type { FindOutcome } from '../src/dock/types.ts'
 import { electronAccessibilityTrusted } from './accessibility.ts'
 import { DARWIN_APPLESCRIPT, WIN32_POWERSHELL } from './hostScripts.ts'
@@ -36,24 +36,26 @@ async function findDarwin(): Promise<FindOutcome> {
   let fromList: FindOutcome | null = null
   if (snapshot) {
     const picked = selectWeChatWindow(snapshot)
-    // CG empty and the AXUIElement probe missed: do not return that outcome.
-    // System Events still has the window (live bounds 0,111,915,693).
+    // An on-screen window docks immediately. Cmd+H sets appHidden and must
+    // not fall through to a stale System Events frame.
     if (picked.bounds) return picked
+    if (snapshot.appHidden) return { bounds: null, reason: 'hidden' }
     fromList = picked
   }
 
   const hostTrusted = electronAccessibilityTrusted()
   const ax = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 4000)
-  const axBounds = parseBoundsReport(`${ax.stdout}\n${ax.stderr}`)
-  const resolved = dockOutcomeWithAx(fromList, axBounds, hostTrusted)
-  if (resolved?.reason === 'ok') return resolved
-  if (resolved) return resolved
-
+  const presence = parseWeChatPresence(`${ax.stdout}\n${ax.stderr}`)
   const blob = `${listed.stderr}\n${ax.stderr}`
-  return dockWhenWindowLookupFails({
+  return resolveWeChatVisibility({
+    fromList,
+    presence,
     hostTrusted,
-    wechatRunning: await wechatProcessAlive(),
-    commandMissing: /ENOENT/i.test(blob),
+    fallback: dockWhenWindowLookupFails({
+      hostTrusted,
+      wechatRunning: await wechatProcessAlive(),
+      commandMissing: /ENOENT/i.test(blob),
+    }),
   })
 }
 

@@ -1,7 +1,8 @@
 /**
- * After the assistant has seen WeChat once, hide it when WeChat hides or
- * quits, and show it again when a dockable window returns. Permission
- * problems stay on screen so the user can grant them.
+ * Dock poll → companion window. A visible WeChat window shows the assistant.
+ * Hidden or minimized WeChat hides it, including the first poll. Quitting
+ * hides it only after WeChat has been seen, so a cold start can still explain
+ * that WeChat is not running. Permission prompts stay on screen.
  */
 export function followWeChatVisibility(input: {
   seen: boolean
@@ -10,7 +11,9 @@ export function followWeChatVisibility(input: {
   reason: string
 }): { seen: boolean; show: boolean; hide: boolean } {
   if (input.hasBounds) return { seen: true, show: !input.visible, hide: false }
-  const away = input.reason === 'hidden' || input.reason === 'not-running'
-  if (input.seen && away && input.visible) return { seen: true, show: false, hide: true }
+  if (input.reason === 'hidden' && input.visible) return { seen: input.seen, show: false, hide: true }
+  if (input.seen && input.reason === 'not-running' && input.visible) {
+    return { seen: true, show: false, hide: true }
+  }
   return { seen: input.seen, show: false, hide: false }
 }

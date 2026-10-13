@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAssistivePermissionError, parseBoundsLine, parseBoundsReport } from './parse.ts'
+import { isAssistivePermissionError, parseBoundsLine, parseBoundsReport, parseWeChatPresence } from './parse.ts'
 import { describeDock } from './status.ts'
 
 describe('parseBoundsReport', () => {
@@ -25,6 +25,12 @@ describe('parseBoundsReport', () => {
       height: 693,
       title: '微信',
     })
+  })
+
+  it('treats a hidden or minimized WeChat report as not dockable', () => {
+    expect(parseWeChatPresence('hidden')).toEqual({ presence: 'hidden', bounds: null })
+    expect(parseWeChatPresence('0,111,915,693,微信').presence).toBe('visible')
+    expect(parseWeChatPresence('').presence).toBe('absent')
   })
 
   it('recognizes an assistive-access failure', () => {

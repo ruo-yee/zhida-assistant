@@ -1,37 +1,54 @@
 /**
  * System Events fallback when CGWindowList cannot see WeChat.
  * Position is top-left, same as Electron. A live window is `0,111,915,693,微信`.
- * Title is optional so a bare `0,111,915,693` still docks.
+ * Hidden (Cmd+H) and minimized windows are not live: the script returns `hidden`
+ * so the companion can leave the screen instead of docking to a stale frame.
  */
 export const DARWIN_APPLESCRIPT = `
 tell application "System Events"
   set procNames to {"微信", "WeChat", "Weixin", "WeChatAppEx"}
   set bestArea to 0
   set bestLine to ""
+  set sawProcess to false
   repeat with procName in procNames
     if exists (process procName) then
+      set sawProcess to true
       tell process procName
-        repeat with w in windows
-          try
-            set winSize to size of w
-            set winW to item 1 of winSize
-            set winH to item 2 of winSize
-            set area to winW * winH
-            if winW >= 240 and winH >= 240 and area > bestArea then
-              set winPos to position of w
-              set winTitle to ""
+        set appVisible to true
+        try
+          set appVisible to visible
+        end try
+        if appVisible then
+          repeat with w in windows
+            try
+              set minimized to false
               try
-                set winTitle to name of w
+                set minimized to (value of attribute "AXMinimized" of w) as boolean
               end try
-              set bestArea to area
-              set bestLine to (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "," & (winW as text) & "," & (winH as text) & "," & winTitle
-            end if
-          end try
-        end repeat
+              if minimized is false then
+                set winSize to size of w
+                set winW to item 1 of winSize
+                set winH to item 2 of winSize
+                set area to winW * winH
+                if winW >= 240 and winH >= 240 and area > bestArea then
+                  set winPos to position of w
+                  set winTitle to ""
+                  try
+                    set winTitle to name of w
+                  end try
+                  set bestArea to area
+                  set bestLine to (item 1 of winPos as text) & "," & (item 2 of winPos as text) & "," & (winW as text) & "," & (winH as text) & "," & winTitle
+                end if
+              end if
+            end try
+          end repeat
+        end if
       end tell
     end if
   end repeat
-  return bestLine
+  if bestLine is not "" then return bestLine
+  if sawProcess then return "hidden"
+  return ""
 end tell
 `
 

@@ -8,8 +8,13 @@ describe('followWeChatVisibility', () => {
       show: true,
       hide: false,
     })
-    expect(followWeChatVisibility({ seen: true, visible: true, hasBounds: false, reason: 'hidden' })).toMatchObject({
+    expect(followWeChatVisibility({ seen: false, visible: true, hasBounds: false, reason: 'hidden' })).toEqual({
+      seen: false,
+      show: false,
       hide: true,
+    })
+    expect(followWeChatVisibility({ seen: true, visible: false, hasBounds: false, reason: 'hidden' })).toMatchObject({
+      hide: false,
       show: false,
     })
     expect(followWeChatVisibility({ seen: true, visible: true, hasBounds: false, reason: 'permission' })).toMatchObject({

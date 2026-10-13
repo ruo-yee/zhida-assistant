@@ -31,6 +31,8 @@ export interface WeChatWindowSnapshot {
   /** null when Accessibility was not asked (a CG hit already existed). */
   axTrusted: boolean | null
   axBounds: { x: number; y: number; width: number; height: number } | null
+  /** Main WeChat app is hidden with Cmd+H. Helpers alone do not set this. */
+  appHidden: boolean
   error?: string
 }
 
@@ -78,6 +80,7 @@ export function parseWeChatSnapshot(stdout: string): WeChatWindowSnapshot | null
       windows?: unknown
       axTrusted?: unknown
       axBounds?: unknown
+      appHidden?: unknown
       error?: unknown
     }
     const windows = Array.isArray(raw.windows) ? raw.windows : []
@@ -111,6 +114,7 @@ export function parseWeChatSnapshot(stdout: string): WeChatWindowSnapshot | null
       }),
       axTrusted: raw.axTrusted === null || raw.axTrusted === undefined ? null : Boolean(raw.axTrusted),
       axBounds: axBounds && axBounds.width > 0 && axBounds.height > 0 ? axBounds : null,
+      appHidden: Boolean(raw.appHidden),
       error: raw.error ? String(raw.error) : undefined,
     }
   } catch {

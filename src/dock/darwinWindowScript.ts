@@ -12,7 +12,7 @@ export function darwinWeChatWindowScript() {
   var bundles = ${bundles};
   var exactNames = ${names};
   function fail(message) {
-    return JSON.stringify({ error: message, pids: [], names: [], selfPid: Number(argv[0] || 0), windows: [], axTrusted: null, axBounds: null });
+    return JSON.stringify({ error: message, pids: [], names: [], selfPid: Number(argv[0] || 0), windows: [], axTrusted: null, axBounds: null, appHidden: false });
   }
   function nsString(value) {
     if (value === null || value === undefined) return '';
@@ -50,6 +50,7 @@ export function darwinWeChatWindowScript() {
   var pids = [];
   var names = [];
   var pidSeen = {};
+  var mainStates = [];
   try {
     var apps = $.NSWorkspace.sharedWorkspace.runningApplications;
     for (var i = 0; i < apps.count; i++) {
@@ -62,10 +63,14 @@ export function darwinWeChatWindowScript() {
       pidSeen[pid] = 1;
       pids.push(pid);
       if (name) names.push(name);
+      if (bid === 'com.tencent.xinWeChat' || name === '微信' || name === 'WeChat' || name === 'Weixin') {
+        mainStates.push(isAppHidden(app) ? 1 : 0);
+      }
     }
   } catch (error) {
     return fail('workspace-failed');
   }
+  var appHidden = mainStates.length > 0 && mainStates.indexOf(0) < 0;
   var windows = [];
   try {
     var opts = $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements;
@@ -94,7 +99,18 @@ export function darwinWeChatWindowScript() {
   }
   var hostTrusted = String(argv[1] || '') === '1';
   var ax = hasDockable(pids, nameSet, windows) ? { trusted: null, bounds: null } : probeAx(pids, hostTrusted);
-  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: ax.trusted, axBounds: ax.bounds });
+  return JSON.stringify({ pids: pids, names: names, selfPid: selfPid, windows: windows, axTrusted: ax.trusted, axBounds: ax.bounds, appHidden: appHidden });
+}
+function isAppHidden(app) {
+  try {
+    var value = app.hidden;
+    if (typeof value === 'function') value = app.isHidden();
+    var flag = value;
+    try { flag = ObjC.unwrap(value); } catch (error) {}
+    return flag === true || flag === 1;
+  } catch (error) {
+    return false;
+  }
 }
 function hasDockable(pids, nameSet, windows) {
   var set = {};

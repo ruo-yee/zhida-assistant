@@ -29,6 +29,7 @@ function snapshot(partial: Partial<WeChatWindowSnapshot> = {}): WeChatWindowSnap
     windows: [],
     axTrusted: null,
     axBounds: null,
+    appHidden: false,
     ...partial,
   }
 }
@@ -146,6 +147,8 @@ describe('darwinWeChatWindowScript', () => {
     const script = darwinWeChatWindowScript()
     expect(script).toContain('com.tencent.xinWeChat')
     expect(script).toContain('AXIsProcessTrusted')
+    expect(script).toContain('appHidden')
+    expect(script).toContain('function isAppHidden')
     expect(script).not.toContain('AXTrustedCheckOptionPrompt')
   })
 })

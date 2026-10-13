@@ -16,6 +16,17 @@ export function parseBoundsLine(line: string): HostWindow | null {
   return { x, y, width, height, title: (match[5] ?? '').trim() || '微信' }
 }
 
+export type WeChatPresence = 'visible' | 'hidden' | 'absent'
+
+/** System Events says `hidden` when WeChat is running but minimized or concealed. */
+export function parseWeChatPresence(stdout: string): { presence: WeChatPresence; bounds: HostWindow | null } {
+  const bounds = parseBoundsReport(stdout)
+  if (bounds) return { presence: 'visible', bounds }
+  const hidden = stdout.split(/\r?\n/).some((line) => line.trim().toLowerCase() === 'hidden')
+  if (hidden) return { presence: 'hidden', bounds: null }
+  return { presence: 'absent', bounds: null }
+}
+
 export function parseBoundsReport(stdout: string): HostWindow | null {
   const windows = stdout
     .split(/\r?\n/)
