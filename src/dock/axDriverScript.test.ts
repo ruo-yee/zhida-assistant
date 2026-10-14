@@ -61,6 +61,8 @@ describe('WeChat session reader when CoreGraphics is empty', () => {
     const native = readFileSync('electron/wechat/macNative.ts', 'utf8')
     expect(native).toContain('CGWindowListCopyWindowInfo')
     expect(native).toContain('AXManualAccessibility')
+    expect(native).toContain('_Out_ CFType **value')
+    expect(native).not.toContain('_Out_ void **value')
     expect(native).toContain('chatTitleFrom')
     expect(native).toContain('HIServices.framework/HIServices')
     expect(native).toContain('readAxComposer')

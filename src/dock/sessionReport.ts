@@ -29,8 +29,18 @@ export function resolveChatTitle(parts: ChatTitleParts) {
   return ''
 }
 
+/** Letter-spaced Latin such as `b u l a j i` is one name. Same rule as the reference normalizer. */
+const SPACED_LATIN = /^(?:[A-Za-z0-9_-]\s+){2,}[A-Za-z0-9_-]$/
+
+export function normalizeChatTitle(value: string) {
+  let text = value.replace(/\s+/g, ' ').trim()
+  if (SPACED_LATIN.test(text)) text = text.replace(/ /g, '')
+  else text = text.replace(/(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/gu, '')
+  return text.trim()
+}
+
 export function realChatTitle(value: string) {
-  const raw = value.replace(/\s+/g, ' ').trim()
+  const raw = normalizeChatTitle(value)
   const stripped = stripCountSuffix(raw)
   if (!stripped || !usableTitle(raw) || AUXILIARY.has(stripped) || BARE_COUNT.test(stripped) || CLOCK.test(stripped)) {
     return ''

@@ -180,7 +180,7 @@ export function pickChatElement<T>(
 export function chatTitleFrom(windowTitle: string, element: unknown, read: AxRead) {
   const named = realChatTitle(windowTitle)
   if (named) return named
-  const header = headerTitleSearch(element, read).title
+  const header = realChatTitle(headerTitleSearch(element, read).title)
   if (header) return header
-  return selectedRowTitleFrom(element, read)
+  return realChatTitle(selectedRowTitleFrom(element, read))
 }

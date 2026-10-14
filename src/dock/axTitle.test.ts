@@ -42,6 +42,20 @@ describe('chat title ladder', () => {
     expect(session?.peerName).toBe('迈腾7连-3班')
   })
 
+  it('joins a letter-spaced Latin header into the chat name', () => {
+    const header: Node = {
+      role: 'AXStaticText',
+      id: 'big_title_line_h_view',
+      value: 'b u l a j i',
+    }
+    const window: Node = { role: 'AXWindow', title: '微信', children: [header] }
+    const title = chatTitleFrom('微信', window, reader())
+    expect(title).toBe('bulaji')
+    const session = liveSession({ hasWindow: true, title, transcript: [], composerText: '', db: null })
+    expect(session?.peerName).toBe('bulaji')
+    expect(session?.chatType).toBe('private')
+  })
+
   it('reads AXTitle only when the header value is empty', () => {
     const header: Node = {
       role: 'AXStaticText',

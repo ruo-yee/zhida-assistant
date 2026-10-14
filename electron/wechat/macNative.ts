@@ -111,6 +111,7 @@ function bindNative(): Native {
       symbol(name: string): bigint
     }
     decode(ptr: bigint, type: string): unknown
+    opaque(name: string): unknown
   }
   const cf = koffi.load('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
   const cg = koffi.load('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
@@ -139,7 +140,11 @@ function bindNative(): Native {
   const procPidPath = libc.func('int proc_pidpath(int pid, void *buffer, uint32 size)')
 
   const AXCreate = ax.func('void *AXUIElementCreateApplication(int pid)')
-  const AXCopy = ax.func('int AXUIElementCopyAttributeValue(void *element, void *attribute, _Out_ void **value)')
+  // CFTypeRef is already a pointer. The out argument is CFTypeRef *, which is
+  // CFType **. Koffi only copies a named opaque double pointer into the array;
+  // `_Out_ void **` leaves the slot null, so every attribute read was empty.
+  koffi.opaque('CFType')
+  const AXCopy = ax.func('int AXUIElementCopyAttributeValue(void *element, void *attribute, _Out_ CFType **value)')
   const AXSet = ax.func('int AXUIElementSetAttributeValue(void *element, void *attribute, void *value)')
   const AXTimeout = ax.func('int AXUIElementSetMessagingTimeout(void *element, float seconds)')
   const axValue = bindAxValue(ax)
@@ -367,7 +372,9 @@ function bindNative(): Native {
     chatTitle(target: Frame | null): AxChatRead {
       const procs = wechatPids()
       const main = procs.find((item) => rankPath(item.path) === 0)
-      if (main && appHidden(main.pid)) return { state: 'minimized', title: '' }
+      // A docked on-screen frame means the chat is visible. A flaky isHidden
+      // must not skip the tree, or the session stays 「当前微信会话」.
+      if (!target && main && appHidden(main.pid)) return { state: 'minimized', title: '' }
       let saw = false
       let visible = false
       let title = ''
@@ -413,7 +420,7 @@ function bindNative(): Native {
       const empty: AxComposer = { found: false, value: null, title: '' }
       const procs = wechatPids()
       const main = procs.find((item) => rankPath(item.path) === 0)
-      if (main && appHidden(main.pid)) return empty
+      if (!target && main && appHidden(main.pid)) return empty
       try {
         for (const proc of procs) {
           const root = AXCreate(proc.pid)
