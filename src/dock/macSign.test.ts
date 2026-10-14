@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const require = createRequire(import.meta.url)
 const { LOCAL_IDENTITY, parseIdentityLines, resolveMacIdentity } = require('../../packaging/resolveIdentity.cjs')
+const { signArguments } = require('../../scripts/macStableSign.cjs')
 
 describe('stable mac signing identity', () => {
   it('prefers CSC_NAME, then Apple Development, and does not rotate a local certificate', () => {
@@ -53,5 +54,15 @@ describe('stable mac signing identity', () => {
     const local = readFileSync('packaging/make_local_signing.sh', 'utf8')
     expect(local).toContain('Zhida Assistant Local Signing')
     expect(local).toContain('will not be rotated')
+  })
+
+  it('passes the bundle path to codesign', () => {
+    const app = '/tmp/智答助手.app'
+    const args = signArguments(app, 'Zhida Assistant Local Signing')
+    expect(args.slice(0, 3)).toEqual(['--force', '--sign', 'Zhida Assistant Local Signing'])
+    expect(args.at(-1)).toBe(app)
+    expect(args.some((arg: string) => arg.endsWith('build/entitlements.mac.plist'))).toBe(true)
+    expect(args).not.toContain('--options')
+    expect(args).not.toContain('runtime')
   })
 })

@@ -62,14 +62,22 @@ function codesignInfo(target) {
   return `${result.stdout || ''}\n${result.stderr || ''}`
 }
 
-function sign(target, identity) {
+function signArguments(target, identity) {
   const entitlements = path.join(__dirname, '..', 'build', 'entitlements.mac.plist')
   const args = ['--force', '--sign', identity]
   if (fs.existsSync(entitlements)) args.push('--entitlements', entitlements)
   // Do not pass --options runtime. Hardened Runtime without the Electron JIT
   // entitlements crashes on launch; electron-builder.yml leaves it off.
-  execFileSync('codesign', args, { stdio: 'inherit' })
+  // The bundle path is the last argument. Without it codesign exits before signing.
+  args.push(target)
+  return args
 }
+
+function sign(target, identity) {
+  execFileSync('codesign', signArguments(target, identity), { stdio: 'inherit' })
+}
+
+module.exports.signArguments = signArguments
 
 function resign(appPath, identity) {
   const bundles = []
