@@ -1,5 +1,5 @@
 import { CORPUS } from '../domain/knowledge/corpus.ts'
-import { normalizeKnowledgeSettings, type KnowledgeSource } from '../domain/knowledge/library.ts'
+import { normalizeKnowledgeSettings, type KnowledgeSource, type LocalNote } from '../domain/knowledge/library.ts'
 import { migratePersonaSettings, type SavedPersona } from '../domain/reply/personas.ts'
 import type { Persona } from '../domain/types.ts'
 
@@ -21,6 +21,7 @@ export interface Settings {
   knowledgeSource: KnowledgeSource
   folderPath: string
   obsidianPath: string
+  localNotes: LocalNote[]
   modelMode: ModelMode
   openaiBase: string
   openaiModel: string
@@ -89,6 +90,7 @@ export function defaultSettings(): Settings {
     knowledgeSource: 'builtin',
     folderPath: '',
     obsidianPath: '',
+    localNotes: [],
     ...model,
   }
 }
@@ -118,6 +120,7 @@ export function loadSettings(): Settings {
       knowledgeSource: library.knowledgeSource,
       folderPath: library.folderPath,
       obsidianPath: library.obsidianPath,
+      localNotes: library.localNotes,
       ...model,
     }
   } catch {

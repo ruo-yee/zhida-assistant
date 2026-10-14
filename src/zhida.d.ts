@@ -14,6 +14,7 @@ declare global {
       writeModelKey: (key: string) => Promise<void>
       pickLibraryFolder: (kind: 'folder' | 'obsidian') => Promise<string>
       indexLibrary: (folder: string, kind: 'folder' | 'obsidian') => Promise<FolderIndexResult>
+      watchLibrary: (folder: string, kind: 'folder' | 'obsidian', callback: () => void) => () => void
       pathForDroppedFile: (file: unknown) => string
       classifyLibrary: (folder: string) => Promise<'folder' | 'obsidian' | 'unknown'>
       onDockStatus: (callback: (status: DockStatus) => void) => () => void

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { FolderIndexResult, IndexedFile } from './indexStatus.ts'
@@ -56,6 +57,19 @@ export async function indexLibraryFolder(folder: string, kind: 'folder' | 'obsid
   }
   if (files.length === 0) return { ok: false, code: 'empty' }
   return { ok: true, files }
+}
+
+/**
+ * Stable picture of what retrieval would read. Hidden files and other
+ * extensions stay out, so an Obsidian config change does not look like a new note.
+ * An empty or unreadable folder keeps a fixed code so the caller can fall back.
+ */
+export async function libraryFingerprint(folder: string, kind: 'folder' | 'obsidian'): Promise<string> {
+  const indexed = await indexLibraryFolder(folder, kind)
+  if (!indexed.ok) return `code:${indexed.code}`
+  return indexed.files
+    .map((file) => `${file.id}\t${file.title}\t${createHash('sha1').update(file.body).digest('hex')}`)
+    .join('\n')
 }
 
 async function walk(root: string, dir: string, depth: number, files: IndexedFile[]) {

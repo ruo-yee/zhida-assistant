@@ -191,7 +191,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const [folderPath, setFolderPath] = useState(boot.folderPath)
   const [obsidianPath, setObsidianPath] = useState(boot.obsidianPath)
   const [libraryFiles, setLibraryFiles] = useState<Array<{ id: string; title: string; body: string }>>([])
-  const [savedNotes, setSavedNotes] = useState<LocalNote[]>([])
+  const [savedNotes, setSavedNotes] = useState<LocalNote[]>(boot.localNotes)
+  const [libraryEpoch, setLibraryEpoch] = useState(0)
   const [libraryPhase, setLibraryPhase] = useState<IndexPhase>('idle')
   const [libraryCode, setLibraryCode] = useState<IndexFailure | null>(null)
   const [showDemo, setShowDemo] = useState(() => !window.zhida)
@@ -226,6 +227,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   const forceErrorRef = useRef(false)
   const regenToken = useRef(0)
   const toastTimer = useRef<number | null>(null)
+  const indexedKeyRef = useRef('')
   const trackedRef = useRef<WeChatSession | null>(null)
   const outboundRef = useRef<PendingOutbound[]>([])
   const seenCustomer = useRef<string | null>(null)
@@ -288,6 +290,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (knowledgeSource === 'builtin') {
+      indexedKeyRef.current = ''
       setLibraryFiles([])
       setLibraryPhase('idle')
       setLibraryCode(null)
@@ -295,6 +298,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     }
     const folder = knowledgeSource === 'obsidian' ? obsidianPath : folderPath
     if (!folder.trim()) {
+      indexedKeyRef.current = ''
       setLibraryFiles([])
       setLibraryPhase('idle')
       setLibraryCode(null)
@@ -302,15 +306,19 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     }
     const index = window.zhida?.indexLibrary
     if (!index) {
+      indexedKeyRef.current = ''
       setLibraryFiles([])
       setLibraryPhase('desktop')
       setLibraryCode(null)
       return
     }
+    const key = `${knowledgeSource}\0${folder}`
+    const quiet = indexedKeyRef.current === key
     let cancel = false
-    setLibraryPhase('loading')
+    if (!quiet) setLibraryPhase('loading')
     void index(folder, knowledgeSource).then((result) => {
       if (cancel) return
+      indexedKeyRef.current = key
       if (!result.ok) {
         setLibraryFiles([])
         setLibraryCode(result.code)
@@ -324,6 +332,15 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancel = true
     }
+  }, [knowledgeSource, folderPath, obsidianPath, libraryEpoch])
+
+  useEffect(() => {
+    const watch = window.zhida?.watchLibrary
+    if (!watch) return
+    if (knowledgeSource === 'builtin') return watch('', 'folder', () => undefined)
+    const folder = knowledgeSource === 'obsidian' ? obsidianPath : folderPath
+    if (!folder.trim()) return watch('', knowledgeSource, () => undefined)
+    return watch(folder, knowledgeSource, () => setLibraryEpoch((value) => value + 1))
   }, [knowledgeSource, folderPath, obsidianPath])
 
   useEffect(() => {
@@ -375,6 +392,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           knowledgeSource,
           folderPath,
           obsidianPath,
+          localNotes: savedNotes,
           modelMode,
           openaiBase,
           openaiModel,
@@ -386,7 +404,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     )
     if (secureKey) void window.zhida?.writeModelKey(openaiKey)
     document.documentElement.dataset.theme = theme
-  }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, knowledgeSource, folderPath, obsidianPath, modelMode, openaiBase, openaiModel, openaiKey])
+  }, [theme, persona, activePersonaId, customPersonas, enabledDocIds, knowledgeSource, folderPath, obsidianPath, savedNotes, modelMode, openaiBase, openaiModel, openaiKey])
 
   const runPipeline = useCallback(
     async (opts?: { retry?: boolean; fail?: boolean }) => {

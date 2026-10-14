@@ -6,6 +6,7 @@ import { describeDock } from '../src/dock/status.ts'
 import type { DockStatus } from '../src/dock/types.ts'
 import type { HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
 import { classifyDroppedPath, indexLibraryFolder } from '../src/domain/knowledge/folderIndex.ts'
+import { startLibraryWatch, stopLibraryWatch } from './libraryWatch.ts'
 import { electronAccessibilityTrusted, promptForAccessibilityOnce } from './accessibility.ts'
 import { redockAfterGrant } from '../src/domain/wechat/accessibilityCopy.ts'
 import { findWeChatWindow } from './findWeChat.ts'
@@ -254,6 +255,12 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('library:index', (_event, folder: string, kind: string) =>
       indexLibraryFolder(String(folder ?? ''), kind === 'obsidian' ? 'obsidian' : 'folder'),
     )
+    ipcMain.handle('library:watch', (event, folder: string, kind: string) => {
+      const sender = event.sender
+      startLibraryWatch(String(folder ?? ''), kind === 'obsidian' ? 'obsidian' : 'folder', () => {
+        if (!sender.isDestroyed()) sender.send('library:changed')
+      })
+    })
     createWindow()
     void tick()
     void pollWeChat()
@@ -276,6 +283,7 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.on('before-quit', () => {
+    stopLibraryWatch()
     if (timer) clearInterval(timer)
     if (wechatTimer) clearInterval(wechatTimer)
   })

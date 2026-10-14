@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { DEFAULT_MODEL_BASE, DEFAULT_MODEL_NAME, SETTINGS_VERSION, migrateModelSettings, persistableSettings } from './settings.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { createKnowledgeRetriever } from '../domain/knowledge/KnowledgeRetriever.ts'
+import { retrievalLibrary } from '../domain/knowledge/library.ts'
+import {
+  DEFAULT_MODEL_BASE,
+  DEFAULT_MODEL_NAME,
+  SETTINGS_VERSION,
+  defaultSettings,
+  loadSettings,
+  migrateModelSettings,
+  persistableSettings,
+  saveSettings,
+} from './settings.ts'
 
 describe('migrateModelSettings', () => {
   it('starts new installs on the local model endpoint', () => {
@@ -49,6 +60,7 @@ describe('migrateModelSettings', () => {
       knowledgeSource: 'builtin' as const,
       folderPath: '',
       obsidianPath: '',
+      localNotes: [],
       modelMode: 'openai' as const,
       openaiBase: DEFAULT_MODEL_BASE,
       openaiModel: DEFAULT_MODEL_NAME,
@@ -57,5 +69,39 @@ describe('migrateModelSettings', () => {
     }
     expect(persistableSettings(settings, true).openaiKey).toBe('')
     expect(persistableSettings(settings, false).openaiKey).toBe('sk-secret')
+  })
+
+  it('keeps local notes after a restart and still searches them in the built-in library', async () => {
+    const memory = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        memory.set(key, value)
+      },
+      removeItem: (key: string) => {
+        memory.delete(key)
+      },
+    })
+    try {
+      const note = { id: 'note-ab12cd', title: '退货政策', body: '七天无理由退款，运费另计', updatedAt: '2026-10-14' }
+      saveSettings(persistableSettings({ ...defaultSettings(), localNotes: [note], openaiKey: 'sk-secret' }, true))
+      const loaded = loadSettings()
+      expect(loaded.localNotes).toEqual([note])
+      expect(loaded.openaiKey).toBe('')
+      const library = retrievalLibrary({
+        source: 'builtin',
+        files: [],
+        notes: loaded.localNotes,
+        enabledDocIds: loaded.enabledDocIds,
+      })
+      const hits = await createKnowledgeRetriever(library.docs).search({
+        messages: [{ role: 'customer', text: '退货政策 七天无理由退款' }],
+        enabledDocIds: library.enabledDocIds,
+      })
+      expect(hits.some((hit) => hit.id === note.id)).toBe(true)
+      expect(library.fallback).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

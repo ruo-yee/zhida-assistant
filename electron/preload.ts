@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld('zhida', {
   pickLibraryFolder: (kind: 'folder' | 'obsidian'): Promise<string> => ipcRenderer.invoke('library:pick', kind),
   indexLibrary: (folder: string, kind: 'folder' | 'obsidian'): Promise<FolderIndexResult> =>
     ipcRenderer.invoke('library:index', folder, kind),
+  watchLibrary: (folder: string, kind: 'folder' | 'obsidian', callback: () => void): (() => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('library:changed', listener)
+    void ipcRenderer.invoke('library:watch', folder, kind)
+    return () => {
+      ipcRenderer.removeListener('library:changed', listener)
+      void ipcRenderer.invoke('library:watch', '', 'folder')
+    }
+  },
   pathForDroppedFile: (file: Parameters<typeof webUtils.getPathForFile>[0]): string => {
     try {
       return webUtils.getPathForFile(file)
