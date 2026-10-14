@@ -121,15 +121,35 @@ export function pickOcrTitle(lines: string[]) {
 
 export interface OcrObservation {
   y: number
+  x: number
+  height: number
   text: string
 }
 
-/** Header band first, then the rest of the capture. Y grows downward, 0–1. */
+/**
+ * Texts of the top-most text row. Same rule as the reference `title_row`:
+ * a pinned notice under the title is not part of the name.
+ */
+export function titleRowTexts(observations: OcrObservation[]) {
+  const items = observations.filter((item) => item.text.trim())
+  if (items.length === 0) return []
+  const first = items.reduce((best, item) => (item.y < best.y ? item : best))
+  const height = first.height > 0 ? first.height : 0
+  const rowBottom = first.y + height
+  const row = items.filter((item) => {
+    if (height <= 0) return Math.abs(item.y - first.y) <= 1e-4
+    const itemHeight = item.height > 0 ? item.height : height
+    return item.y + itemHeight / 2 <= rowBottom
+  })
+  row.sort((a, b) => a.x - b.x)
+  return row.map((item) => item.text.trim())
+}
+
+/** Title from the top text row only. Lower lines stay available as messages. */
 export function pickOcrChat(observations: OcrObservation[]) {
   const sorted = observations.filter((item) => item.text.trim()).sort((a, b) => a.y - b.y)
-  const header = sorted.filter((item) => item.y <= 0.16).map((item) => item.text)
   const texts = sorted.map((item) => item.text)
-  const title = pickOcrTitle(header) || pickOcrTitle(texts)
+  const title = pickOcrTitle(titleRowTexts(sorted))
   return { title, lines: pickVisibleLines(texts, title) }
 }
 
@@ -137,26 +157,52 @@ export function parseOcrObservations(stdout: string): OcrObservation[] {
   const out: OcrObservation[] = []
   for (const row of stdout.split(/\r?\n/)) {
     if (!row.startsWith('LINE\t')) continue
-    const rest = row.slice(5)
-    const tab = rest.indexOf('\t')
-    if (tab < 0) continue
-    const y = Number(rest.slice(0, tab))
-    const text = rest.slice(tab + 1).trim()
-    if (!text || !Number.isFinite(y)) continue
-    out.push({ y, text })
+    const parts = row.slice(5).split('\t')
+    if (parts.length < 2) continue
+    const y = Number(parts[0])
+    if (!Number.isFinite(y)) continue
+    if (parts.length >= 4) {
+      const x = Number(parts[1])
+      const height = Number(parts[2])
+      const text = parts.slice(3).join('\t').trim()
+      if (!text) continue
+      out.push({ y, x: Number.isFinite(x) ? x : 0, height: Number.isFinite(height) ? height : 0, text })
+      continue
+    }
+    const text = parts.slice(1).join('\t').trim()
+    if (!text) continue
+    out.push({ y, x: 0, height: 0, text })
   }
   return out
 }
 
-/** Conversation pane of a docked WeChat window, top-left origin, points. */
+/**
+ * Title band of a docked WeChat window, top-left origin, points.
+ * Same geometry as the reference `title_crop_for` with `fallback_pane_left`:
+ * icon rail 68, chat list 280, 36pt bias, 96pt right margin, 4pt from the top, 72pt tall.
+ */
 export function conversationCrop(bounds: { x: number; y: number; width: number; height: number }) {
-  const left = Math.min(312, Math.max(bounds.width - 200, 0))
-  const width = Math.max(120, bounds.width - left - 24)
-  const height = Math.max(80, Math.min(bounds.height - 8, Math.round(bounds.height * 0.72)))
+  const windowWidth = bounds.width
+  const windowHeight = bounds.height
+  if (windowWidth <= 1 || windowHeight <= 1) {
+    return {
+      x: Math.round(bounds.x + windowWidth * 0.3),
+      y: Math.round(bounds.y + windowHeight * 0.018),
+      width: Math.max(1, Math.round(windowWidth * 0.62)),
+      height: Math.max(1, Math.round(windowHeight * 0.1)),
+    }
+  }
+  const paneLeft = Math.min(68 + 280, Math.max(windowWidth - 180, 0))
+  let left = paneLeft - 36
+  left = Math.min(Math.max(left, 68), Math.max(windowWidth - 80, 0))
+  let right = windowWidth - 96
+  if (right < left + 80) right = Math.min(windowWidth, left + 80)
+  const top = Math.min(4, Math.max(windowHeight - 1, 0))
+  const height = Math.max(Math.min(72, windowHeight - top), 1)
   return {
     x: Math.round(bounds.x + left),
-    y: Math.round(bounds.y + 2),
-    width: Math.round(Math.min(width, bounds.width - left)),
+    y: Math.round(bounds.y + top),
+    width: Math.round(right - left),
     height: Math.round(height),
   }
 }

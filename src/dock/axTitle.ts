@@ -155,9 +155,9 @@ export function selectedRowTitleFrom(window: unknown, read: AxRead) {
 }
 
 /**
- * Main window first, then the rest. A frame match wins. Otherwise the first
- * window that is not minimized. The reference never walks those windows
- * while choosing one.
+ * Match the on-screen chat frame, then the first candidate.
+ * Same order as the reference `_chat_ax_window`: a minimized first window
+ * is not replaced by a later one unless its frame is the chat.
  */
 export function pickChatElement<T>(
   candidates: T[],
@@ -165,13 +165,15 @@ export function pickChatElement<T>(
   frameOf: (item: T) => Frame | null,
   minimized: (item: T) => boolean,
 ): T | null {
-  const live = candidates.filter((item) => !minimized(item))
   if (target) {
-    for (const item of live) {
+    for (const item of candidates) {
+      if (minimized(item)) continue
       if (framesNear(frameOf(item), target)) return item
     }
   }
-  return live[0] ?? null
+  const first = candidates[0]
+  if (first == null || minimized(first)) return null
+  return first
 }
 
 /** Window title when it names a chat, otherwise the header, otherwise the selected row. */

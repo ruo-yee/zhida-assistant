@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
+import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
 import { WECHAT_OWNER_NAMES, type WeChatWindowSnapshot } from '../../src/dock/wechatWindow.ts'
 
@@ -111,6 +112,8 @@ function bindNative(): Native {
   const AXCopy = ax.func('int AXUIElementCopyAttributeValue(void *element, void *attribute, _Out_ void **value)')
   const AXSet = ax.func('int AXUIElementSetAttributeValue(void *element, void *attribute, void *value)')
   const AXTimeout = ax.func('int AXUIElementSetMessagingTimeout(void *element, float seconds)')
+  const axValue = bindAxValue(ax)
+  const appHidden = bindAppHidden(koffi)
   const keys = new Map<string, unknown>()
   const key = (name: string) => {
     const found = keys.get(name)
@@ -202,10 +205,40 @@ function bindNative(): Native {
     }
   }
 
+  function arm(element: unknown) {
+    try {
+      AXTimeout(element, 0.5)
+    } catch {
+      /* the application element already has a timeout */
+    }
+  }
+
   function minimized(element: unknown) {
+    arm(element)
     const flag = read(element, 'AXMinimized')
-    if (flag === true || flag === 1 || flag === '1' || flag === 'true') return true
-    return read(element, 'AXSubrole') === 'AXMinimizedWindow'
+    return flag === true || flag === 1 || flag === '1' || flag === 'true'
+  }
+
+  function elementFrame(element: unknown): Frame | null {
+    if (!axValue) return null
+    arm(element)
+    const position = copyAttr(element, 'AXPosition')
+    const size = copyAttr(element, 'AXSize')
+    try {
+      return axValue(position, size, (value) => (alive(value) ? CFGetTypeID(value) : null))
+    } finally {
+      if (alive(position)) CFRelease(position)
+      if (alive(size)) CFRelease(size)
+    }
+  }
+
+  function focusedChatTitle(root: unknown) {
+    const focused = copyAttr(root, 'AXFocusedWindow')
+    if (!alive(focused)) return ''
+    keep(focused)
+    if (minimized(focused)) return ''
+    const text = typeof read(focused, 'AXTitle') === 'string' ? String(read(focused, 'AXTitle')) : ''
+    return realChatTitle(text)
   }
 
   function wechatPids() {
@@ -285,6 +318,7 @@ function bindNative(): Native {
       for (const win of windows) {
         if (win.pid > 0 && owners.has(win.owner)) pids.add(win.pid)
       }
+      const main = procs.find((item) => rankPath(item.path) === 0)
       return {
         pids: [...pids],
         names: pids.size > 0 ? ['微信'] : [],
@@ -292,12 +326,14 @@ function bindNative(): Native {
         windows,
         axTrusted: null,
         axBounds: null,
-        appHidden: false,
+        appHidden: Boolean(main && appHidden(main.pid)),
         concealed: false,
       }
     },
-    chatTitle(_target: Frame | null): AxChatRead {
+    chatTitle(target: Frame | null): AxChatRead {
       const procs = wechatPids()
+      const main = procs.find((item) => rankPath(item.path) === 0)
+      if (main && appHidden(main.pid)) return { state: 'minimized', title: '' }
       let saw = false
       let visible = false
       let title = ''
@@ -315,13 +351,14 @@ function bindNative(): Native {
               /* WeChat 4 exposes the tree after this; a miss is not fatal */
             }
           }
+          if (rankPath(proc.path) === 0) {
+            const focusedTitle = focusedChatTitle(root)
+            if (focusedTitle) return { state: 'visible', title: focusedTitle }
+          }
           const nodes = axWindows(root)
           if (nodes.length === 0) continue
           saw = true
-          // AXMainWindow is first, matching the reference when the focused
-          // window is an emoji picker. Geometry matching is skipped: decoding
-          // AXValue here can crash the process.
-          const chosen = pickChatElement(nodes, null, () => null, minimized)
+          const chosen = pickChatElement(nodes, target, elementFrame, minimized)
           if (!chosen) continue
           visible = true
           const windowTitle = typeof read(chosen, 'AXTitle') === 'string' ? String(read(chosen, 'AXTitle')) : ''
@@ -342,6 +379,10 @@ function bindNative(): Native {
   }
 }
 
+function sameType(left: unknown, right: unknown) {
+  return left != null && right != null && String(left) === String(right)
+}
+
 function alive(value: unknown): value is bigint | number {
   if (typeof value === 'bigint') return value !== 0n
   if (typeof value === 'number') return Number.isFinite(value) && value !== 0
@@ -354,4 +395,69 @@ function isWeChatPath(file: string) {
 
 function rankPath(file: string) {
   return /\/MacOS\/(?:WeChat|Weixin)$/.test(file) ? 0 : 1
+}
+
+type AxLib = { func(definition: string): (...args: any[]) => any }
+
+function bindAxValue(ax: AxLib) {
+  try {
+    const valueType = ax.func('uint64 AXValueGetTypeID()')()
+    const valueKind = ax.func('int AXValueGetType(void *value)')
+    const getValue = ax.func('uint8 AXValueGetValue(void *value, int type, void *bytes)')
+    return (position: unknown, size: unknown, typeOf: (value: unknown) => unknown): Frame | null => {
+      try {
+        if (!sameType(typeOf(position), valueType) || !sameType(typeOf(size), valueType)) return null
+        if (Number(valueKind(position)) !== 1 || Number(valueKind(size)) !== 2) return null
+        const point = Buffer.alloc(16)
+        const box = Buffer.alloc(16)
+        if (!getValue(position, 1, point) || !getValue(size, 2, box)) return null
+        const width = box.readDoubleLE(0)
+        const height = box.readDoubleLE(8)
+        if (!(width > 0 && height > 0)) return null
+        return { x: point.readDoubleLE(0), y: point.readDoubleLE(8), width, height }
+      } catch {
+        return null
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
+function bindAppHidden(koffi: { load(path: string): AxLib }) {
+  try {
+    const objc = koffi.load('/usr/lib/libobjc.A.dylib')
+    const getClass = objc.func('void *objc_getClass(const char *name)')
+    const sel = objc.func('void *sel_registerName(const char *name)')
+    const msg = objc.func('void *objc_msgSend(void *self, void *sel)')
+    const msgBool = objc.func('uint8 objc_msgSend(void *self, void *sel)')
+    const msgInt = objc.func('int objc_msgSend(void *self, void *sel)')
+    const msgCount = objc.func('uint64 objc_msgSend(void *self, void *sel)')
+    const msgAt = objc.func('void *objc_msgSend(void *self, void *sel, uint64 index)')
+    const shared = sel('sharedWorkspace')
+    const running = sel('runningApplications')
+    const countSel = sel('count')
+    const atSel = sel('objectAtIndex:')
+    const pidSel = sel('processIdentifier')
+    const hiddenSel = sel('isHidden')
+    const workspace = getClass('NSWorkspace')
+    return (pid: number) => {
+      try {
+        const apps = msg(msg(workspace, shared), running)
+        if (!alive(apps)) return false
+        const count = Math.min(Number(msgCount(apps, countSel)) || 0, 400)
+        for (let index = 0; index < count; index += 1) {
+          const app = msgAt(apps, atSel, index)
+          if (!alive(app) || Number(msgInt(app, pidSel)) !== pid) continue
+          const flag = Number(msgBool(app, hiddenSel))
+          return flag === 1
+        }
+        return false
+      } catch {
+        return false
+      }
+    }
+  } catch {
+    return () => false
+  }
 }

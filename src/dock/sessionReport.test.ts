@@ -141,11 +141,15 @@ describe('pickOcrChat', () => {
     expect(session?.chatType).toBe('group')
   })
 
-  it('crops the conversation pane inside the docked window', () => {
+  it('uses only the top text row, the way the reference title row does', () => {
+    const seen = pickOcrChat(
+      parseOcrObservations('LINE\t0.04\t0.20\t0.16\t通知栏\nLINE\t0.60\t0.10\t0.18\t另一群 (9)\n'),
+    )
+    expect(seen.title).toBe('通知栏')
+  })
+
+  it('crops the title band the way the reference title crop does', () => {
     const crop = conversationCrop({ x: 0, y: 111, width: 915, height: 693 })
-    expect(crop.x).toBeGreaterThanOrEqual(0)
-    expect(crop.y).toBeGreaterThanOrEqual(111)
-    expect(crop.x + crop.width).toBeLessThanOrEqual(915)
-    expect(crop.y + crop.height).toBeLessThanOrEqual(111 + 693)
+    expect(crop).toEqual({ x: 312, y: 115, width: 507, height: 72 })
   })
 })

@@ -86,6 +86,8 @@ describe('chat title ladder', () => {
     const picked = pickChatElement([mini, emoji, chat], { x: 1, y: 112, width: 915, height: 693 }, (item) => item, (item) => item.minimized)
     expect(picked?.id).toBe('chat')
     expect(pickChatElement([mini], null, (item) => item, (item) => item.minimized)).toBeNull()
+    expect(pickChatElement([mini, chat], null, (item) => item, (item) => item.minimized)).toBeNull()
+    expect(pickChatElement([chat, emoji], null, (item) => item, (item) => item.minimized)?.id).toBe('chat')
   })
 
   it('matches a chat frame within four points', () => {

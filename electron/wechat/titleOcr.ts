@@ -44,12 +44,18 @@ function run(argv) {
       } catch (error) {}
       if (!text) continue
       var y = 0
+      var x = 0
+      var h = 0
       try {
         var box = item.boundingBox
         y = 1 - Number(box.origin.y) - Number(box.size.height)
+        x = Number(box.origin.x)
+        h = Number(box.size.height)
       } catch (error) {}
       if (!isFinite(y)) y = 0
-      lines.push('LINE\\t' + y.toFixed(4) + '\\t' + String(text).replace(/[\\t\\r\\n]+/g, ' '))
+      if (!isFinite(x)) x = 0
+      if (!isFinite(h)) h = 0
+      lines.push('LINE\\t' + y.toFixed(4) + '\\t' + x.toFixed(4) + '\\t' + h.toFixed(4) + '\\t' + String(text).replace(/[\\t\\r\\n]+/g, ' '))
     }
     return lines.join('\\n')
   } catch (error) {
