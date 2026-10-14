@@ -13,6 +13,8 @@ import {
   type ComposerView,
 } from '../../src/domain/wechat/composerPolicy.ts'
 import { describeLiveSession, liveSession } from '../../src/domain/wechat/liveSession.ts'
+import { dockedWeChat } from '../../src/dock/dockedSight.ts'
+import { resolveChatTitle } from '../../src/dock/sessionReport.ts'
 import { matchChat, usableTitle } from '../../src/domain/wechat/matchChat.ts'
 import {
   decodeMessageText,
@@ -21,6 +23,7 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
+import { readAxComposer, writeAxComposer } from './macNative.ts'
 import { mergeComposerView, readDesktopSession } from './visibleSession.ts'
 import {
   accountIdFromRoot,
@@ -125,6 +128,17 @@ export class MacWeChatHost {
     if (!claimed.ok) return handled(false, claimed.reason)
     let sent = false
     try {
+      const frame = chatFrame()
+      const native = writeAxComposer(frame, plan.text, view.trusted)
+      if (native?.found) {
+        const confirmed = confirmInserted(native.value, plan.text, sameTitle(view.title, native.title || view.title))
+        if (confirmed.action === 'refuse') {
+          if (confirmed.reason.includes('会话已变化')) writeAxComposer(frame, '', view.trusted)
+          return handled(false, confirmed.reason)
+        }
+        sent = true
+        return handled(true, '已插入')
+      }
       const written = await runAx('set', plan.text)
       const confirmed = confirmInserted(written.composer, plan.text, sameTitle(view.title, written.title))
       if (confirmed.action === 'refuse') {
@@ -170,6 +184,18 @@ export class MacWeChatHost {
   private async composerView(): Promise<AxView> {
     const visible = await readDesktopSession()
     if (!visible.trusted || !visible.running || !visible.hasWindow) return visible
+    const native = readAxComposer(chatFrame(), visible.trusted)
+    if (native?.found) {
+      const title = resolveChatTitle({ windowTitle: native.title, headerTitle: visible.title }) || visible.title
+      return {
+        ...visible,
+        hasWindow: true,
+        hasTextArea: true,
+        composer: native.value ?? '',
+        title,
+        reason: '',
+      }
+    }
     return mergeComposerView(visible, await runAx('inspect'))
   }
 
@@ -305,6 +331,12 @@ export class MacWeChatHost {
       return show ? message : { ...message, timeLabel: undefined }
     })
   }
+}
+
+function chatFrame() {
+  const bounds = dockedWeChat()?.bounds
+  if (!bounds) return null
+  return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
 }
 
 function toComposer(view: AxView): ComposerView {

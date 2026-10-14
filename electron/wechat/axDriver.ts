@@ -168,15 +168,20 @@ function axSize(el) {
 }
 
 function findInput(window) {
+  var named = null
   var best = null
   var bestArea = 0
+  var any = null
   var queue = [window]
   var seen = 0
   while (queue.length && seen < 3000) {
     var el = queue.shift()
     seen += 1
     var role = axString(copyAttr(el, 'AXRole'))
+    var ident = axString(copyAttr(el, 'AXIdentifier')) || ''
+    if (ident === 'chat_input_field') named = el
     if (role === 'AXTextArea') {
+      any = el
       var size = axSize(el)
       var area = size ? size.w * size.h : 0
       if (area > bestArea) {
@@ -187,8 +192,9 @@ function findInput(window) {
     var kids = childrenOf(el)
     for (var i = 0; i < kids.length; i++) queue.push(kids[i])
   }
-  if (!best || bestArea < 10000) return null
-  return best
+  if (named) return named
+  if (best && bestArea >= 4000) return best
+  return any
 }
 
 function axBool(value) {

@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { pickComposer, type ComposerShape } from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
@@ -14,13 +15,19 @@ export interface AxChatRead {
   title: string
 }
 
+export interface AxComposer {
+  found: boolean
+  value: string | null
+  title: string
+}
+
 let bound: Native | null | undefined
 let titleCache: { at: number; key: string; read: AxChatRead } | null = null
-const manualPids = new Set<number>()
 
 interface Native {
   snapshot(selfPid: number): WeChatWindowSnapshot
   chatTitle(target: Frame | null): AxChatRead
+  composer(target: Frame | null, text: string | null): AxComposer
 }
 
 /**
@@ -46,6 +53,29 @@ export function readOnScreenSnapshot(selfPid: number): WeChatWindowSnapshot | nu
   if (!api) return null
   try {
     return api.snapshot(selfPid)
+  } catch {
+    return null
+  }
+}
+
+export function readAxComposer(target: Frame | null, hostTrusted: boolean): AxComposer | null {
+  if (!hostTrusted) return null
+  const api = lib()
+  if (!api) return null
+  try {
+    return api.composer(target, null)
+  } catch {
+    return null
+  }
+}
+
+/** Write the composer in this process. Null means Accessibility could not be called. */
+export function writeAxComposer(target: Frame | null, text: string, hostTrusted: boolean): AxComposer | null {
+  if (!hostTrusted) return null
+  const api = lib()
+  if (!api) return null
+  try {
+    return api.composer(target, text)
   } catch {
     return null
   }
@@ -84,7 +114,7 @@ function bindNative(): Native {
   }
   const cf = koffi.load('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
   const cg = koffi.load('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
-  const ax = koffi.load('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
+  const ax = loadAx(koffi)
   const libc = koffi.load('/usr/lib/libSystem.B.dylib')
 
   const CFStringCreate = cf.func('void *CFStringCreateWithCString(void *alloc, str text, uint32 encoding)')
@@ -142,9 +172,13 @@ function bindNative(): Native {
     }
   }
 
+  function isKind(value: unknown, typeId: unknown) {
+    return alive(value) && sameType(CFGetTypeID(value), typeId)
+  }
+
   function readString(value: unknown) {
-    if (!alive(value) || CFGetTypeID(value) !== stringType) return ''
-    const buffer = Buffer.alloc(2048)
+    if (!isKind(value, stringType)) return ''
+    const buffer = Buffer.alloc(8192)
     const ok = CFStringGetCString(value, buffer, buffer.length, UTF8)
     if (!ok) return ''
     const end = buffer.indexOf(0)
@@ -152,7 +186,7 @@ function bindNative(): Native {
   }
 
   function readNumber(value: unknown) {
-    if (!alive(value) || CFGetTypeID(value) !== numberType) return 0
+    if (!isKind(value, numberType)) return 0
     const out = [0]
     const ok = CFNumberGetValue(value, FLOAT64, out)
     const number = Number(out[0])
@@ -160,7 +194,7 @@ function bindNative(): Native {
   }
 
   function dictValue(dict: unknown, name: string) {
-    if (!alive(dict) || CFGetTypeID(dict) !== dictType) return null
+    if (!isKind(dict, dictType)) return null
     return CFDictionaryGetValue(dict, key(name))
   }
 
@@ -173,8 +207,8 @@ function bindNative(): Native {
   }
 
   function asArray(value: unknown) {
-    if (!alive(value) || CFGetTypeID(value) !== arrayType) return []
-    const count = Math.min(Number(CFArrayGetCount(value)) || 0, 80)
+    if (!isKind(value, arrayType)) return []
+    const count = Math.min(Number(CFArrayGetCount(value)) || 0, 512)
     const items: unknown[] = []
     for (let index = 0; index < count; index += 1) {
       const item = CFArrayGetValueAtIndex(value, index)
@@ -192,14 +226,14 @@ function bindNative(): Native {
     let kind: unknown = null
     try {
       kind = CFGetTypeID(raw)
-      if (kind === stringType) return readString(raw)
-      if (kind === boolType) return CFBooleanGetValue(raw) ? true : false
-      if (kind === numberType) return readNumber(raw)
-      if (kind === arrayType) return asArray(raw)
+      if (sameType(kind, stringType)) return readString(raw)
+      if (sameType(kind, boolType)) return CFBooleanGetValue(raw) ? true : false
+      if (sameType(kind, numberType)) return readNumber(raw)
+      if (sameType(kind, arrayType)) return asArray(raw)
       keep(raw)
       return raw
     } finally {
-      if (alive(raw) && (kind === stringType || kind === boolType || kind === numberType || kind === arrayType)) {
+      if (alive(raw) && (sameType(kind, stringType) || sameType(kind, boolType) || sameType(kind, numberType) || sameType(kind, arrayType))) {
         CFRelease(raw)
       }
     }
@@ -294,7 +328,7 @@ function bindNative(): Native {
     const raw = copyAttr(root, 'AXWindows')
     if (alive(raw)) {
       try {
-        if (CFGetTypeID(raw) === arrayType) {
+        if (sameType(CFGetTypeID(raw), arrayType)) {
           for (const item of asArray(raw)) {
             if (!nodes.includes(item)) nodes.push(item)
           }
@@ -343,13 +377,12 @@ function bindNative(): Native {
           if (!alive(root)) continue
           keep(root)
           AXTimeout(root, 0.5)
-          if (!manualPids.has(proc.pid)) {
-            manualPids.add(proc.pid)
-            try {
-              if (alive(boolTrue)) AXSet(root, key('AXManualAccessibility'), boolTrue)
-            } catch {
-              /* WeChat 4 exposes the tree after this; a miss is not fatal */
-            }
+          // WeChat 4 builds the tree only after this. Set it on every read so a
+          // first miss does not leave the header and composer invisible.
+          try {
+            if (alive(boolTrue)) AXSet(root, key('AXManualAccessibility'), boolTrue)
+          } catch {
+            /* a miss is not fatal; the tree may already be exposed */
           }
           if (rankPath(proc.path) === 0) {
             const focusedTitle = focusedChatTitle(root)
@@ -376,7 +409,112 @@ function bindNative(): Native {
       if (visible) return { state: 'visible', title: '' }
       return { state: 'none', title: '' }
     },
+    composer(target: Frame | null, text: string | null): AxComposer {
+      const empty: AxComposer = { found: false, value: null, title: '' }
+      const procs = wechatPids()
+      const main = procs.find((item) => rankPath(item.path) === 0)
+      if (main && appHidden(main.pid)) return empty
+      try {
+        for (const proc of procs) {
+          const root = AXCreate(proc.pid)
+          if (!alive(root)) continue
+          keep(root)
+          AXTimeout(root, 0.5)
+          try {
+            if (alive(boolTrue)) AXSet(root, key('AXManualAccessibility'), boolTrue)
+          } catch {
+            /* the tree may already be exposed */
+          }
+          const nodes = axWindows(root)
+          if (nodes.length === 0) continue
+          const chosen = pickChatElement(nodes, target, elementFrame, minimized)
+          if (!chosen) continue
+          const windowTitle = typeof read(chosen, 'AXTitle') === 'string' ? String(read(chosen, 'AXTitle')) : ''
+          const title = chatTitleFrom(windowTitle, chosen, read)
+          const box = findComposer(chosen)
+          if (!box) continue
+          if (text === null) {
+            const value = read(box, 'AXValue')
+            return { found: true, value: typeof value === 'string' ? value : '', title }
+          }
+          const after = assignText(box, text)
+          return { found: true, value: after, title: chatTitleFrom(windowTitle, chosen, read) || title }
+        }
+      } finally {
+        releaseOwned()
+      }
+      return empty
+    },
   }
+
+  function findComposer(window: unknown) {
+    const queue = [window]
+    const found: Array<{ element: unknown; shape: ComposerShape }> = []
+    let seen = 0
+    while (queue.length > 0 && seen < 2000) {
+      const element = queue.shift()
+      if (!alive(element) && element !== window) continue
+      seen += 1
+      const role = typeof read(element, 'AXRole') === 'string' ? String(read(element, 'AXRole')) : ''
+      const identifier = typeof read(element, 'AXIdentifier') === 'string' ? String(read(element, 'AXIdentifier')) : ''
+      if (role === 'AXTextArea' || role === 'AXTextField') {
+        const frame = elementFrame(element)
+        const title = typeof read(element, 'AXTitle') === 'string' ? String(read(element, 'AXTitle')) : ''
+        found.push({
+          element,
+          shape: { role, identifier, title, width: frame?.width ?? 0, height: frame?.height ?? 0 },
+        })
+      }
+      const children = read(element, 'AXChildren')
+      if (Array.isArray(children)) {
+        for (const child of children) queue.push(child)
+      }
+    }
+    return pickComposer(found, (item) => item.shape)?.element ?? null
+  }
+
+  function assignText(element: unknown, text: string) {
+    const created = CFStringCreate(null, text, UTF8)
+    if (!alive(created)) return ''
+    try {
+      if (alive(boolTrue)) {
+        try {
+          AXSet(element, key('AXFocused'), boolTrue)
+        } catch {
+          /* focusing the composer is optional */
+        }
+      }
+      AXSet(element, key('AXValue'), created)
+      const written = read(element, 'AXValue')
+      const value = typeof written === 'string' ? written : ''
+      if (value.trim() === text) return value
+      try {
+        AXSet(element, key('AXSelectedText'), created)
+      } catch {
+        /* AXValue is the primary write */
+      }
+      const again = read(element, 'AXValue')
+      return typeof again === 'string' ? again : value
+    } finally {
+      CFRelease(created)
+    }
+  }
+}
+
+function loadAx(koffi: { load(file: string): AxLib }) {
+  const paths = [
+    '/System/Library/Frameworks/ApplicationServices.framework/Frameworks/HIServices.framework/HIServices',
+    '/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices',
+  ]
+  let last: unknown = null
+  for (const file of paths) {
+    try {
+      return koffi.load(file)
+    } catch (error) {
+      last = error
+    }
+  }
+  throw last instanceof Error ? last : new Error('Accessibility framework')
 }
 
 function sameType(left: unknown, right: unknown) {
