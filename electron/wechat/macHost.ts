@@ -24,6 +24,7 @@ import {
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
 import { readAxComposer, writeAxComposer } from './macNative.ts'
+import { readSystemComposer, writeSystemComposer } from './systemComposer.ts'
 import { mergeComposerView, readDesktopSession } from './visibleSession.ts'
 import {
   accountIdFromRoot,
@@ -140,11 +141,18 @@ export class MacWeChatHost {
         return handled(true, '已插入')
       }
       const written = await runAx('set', plan.text)
-      const confirmed = confirmInserted(written.composer, plan.text, sameTitle(view.title, written.title))
-      if (confirmed.action === 'refuse') {
-        if (confirmed.reason.includes('会话已变化')) await runAx('clear')
-        return handled(false, confirmed.reason)
+      if (written.hasTextArea && written.composer !== null) {
+        const confirmed = confirmInserted(written.composer, plan.text, sameTitle(view.title, written.title))
+        if (confirmed.action === 'refuse') {
+          if (confirmed.reason.includes('会话已变化')) await runAx('clear')
+          return handled(false, confirmed.reason)
+        }
+        sent = true
+        return handled(true, '已插入')
       }
+      const system = await writeSystemComposer(plan.text)
+      const confirmed = confirmInserted(system, plan.text, true)
+      if (confirmed.action === 'refuse') return handled(false, system === null ? '微信没有提供可写入的输入框，请用复制' : confirmed.reason)
       sent = true
       return handled(true, '已插入')
     } finally {
@@ -196,7 +204,11 @@ export class MacWeChatHost {
         reason: '',
       }
     }
-    return mergeComposerView(visible, await runAx('inspect'))
+    const merged = mergeComposerView(visible, await runAx('inspect'))
+    if (merged.hasTextArea && merged.composer !== null) return merged
+    const system = await readSystemComposer()
+    if (system === null) return merged
+    return { ...merged, hasWindow: true, hasTextArea: true, composer: system, reason: '' }
   }
 
   private statusFrom(view: AxView): HostBridgeStatus {

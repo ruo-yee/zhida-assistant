@@ -6,6 +6,7 @@ import {
   parseOcrObservations,
   parseVisibleChatReport,
   pickOcrChat,
+  pickPositionedTitle,
   pickVisibleTitle,
   resolveChatTitle,
 } from './sessionReport.ts'
@@ -13,7 +14,12 @@ import {
 describe('parseVisibleChatReport', () => {
   it('reads the System Events window name and visible lines', () => {
     const report = parseVisibleChatReport('TITLE\t迈腾7连-3班 (322)\nLINE\t明天交作业\nLINE\t收到\n')
-    expect(report).toEqual({ title: '迈腾7连-3班 (322)', lines: ['明天交作业', '收到'] })
+    expect(report).toEqual({
+      title: '迈腾7连-3班 (322)',
+      lines: ['明天交作业', '收到'],
+      bounds: null,
+      placed: [],
+    })
     expect(parseVisibleChatReport('HIDDEN\n')).toBe('hidden')
     expect(parseVisibleChatReport('')).toBeNull()
   })
@@ -146,6 +152,36 @@ describe('pickOcrChat', () => {
       parseOcrObservations('LINE\t0.04\t0.20\t0.16\t通知栏\nLINE\t0.60\t0.10\t0.18\t另一群 (9)\n'),
     )
     expect(seen.title).toBe('通知栏')
+  })
+
+  it('keeps a private Latin name when the window is only called 微信', () => {
+    expect(pickVisibleTitle('微信', ['bulaji', '在吗', '明天交作业'])).toBe('bulaji')
+    expect(pickVisibleTitle('微信', ['在吗', '明天交作业'])).toBe('')
+    expect(pickVisibleTitle('微信', ['b u l a j i'])).toBe('bulaji')
+  })
+
+  it('reads the title band from System Events positions when AX has no window', () => {
+    const report = parseVisibleChatReport(
+      'TITLE\t微信\nBOUNDS\t0\t111\t915\t693\nLINE\t在吗\nPOS\t120\t400\tbulaji\nPOS\t400\t400\t在吗\nPOS\t140\t80\t其他会话\n',
+    )
+    if (report === 'hidden' || !report) throw new Error('expected a report')
+    expect(pickPositionedTitle(report.bounds ?? null, report.placed ?? [])).toBe('bulaji')
+    const merged = mergeVisibleSession({ hasWindow: false, title: '', transcript: [] as string[] }, report)
+    expect(merged.title).toBe('bulaji')
+    const session = liveSession({
+      hasWindow: true,
+      title: merged.title,
+      transcript: merged.transcript,
+      composerText: '',
+      db: null,
+    })
+    expect(session?.peerName).toBe('bulaji')
+    expect(session?.chatType).toBe('private')
+  })
+
+  it('joins a letter-spaced OCR header', () => {
+    const seen = pickOcrChat(parseOcrObservations('LINE\t0.02\t0.40\t0.12\tb u l a j i\nLINE\t0.40\t0.20\t0.10\t在吗\n'))
+    expect(seen.title).toBe('bulaji')
   })
 
   it('crops the title band the way the reference title crop does', () => {

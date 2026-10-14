@@ -174,6 +174,24 @@ export function chooseChatWindow(windows: ListedWindow[]): ListedWindow | null {
 }
 
 /**
+ * On-screen windows win. When that list has no dockable WeChat window,
+ * keep a layer-0 window from the full list (option 0). WeChat 4 can be
+ * visible while `kCGWindowListOptionOnScreenOnly` omits it.
+ */
+export function mergeChatWindows(onScreen: ListedWindow[], allWindows: ListedWindow[], pids: number[]): ListedWindow[] {
+  const pidSet = new Set(pids)
+  const owners = new Set<string>(WECHAT_OWNER_NAMES)
+  const visible = onScreen.some((win) => isDockable(win) && isWeChatWindow(win, pidSet, owners))
+  if (visible) return onScreen
+  const seen = new Set(onScreen.map((win) => win.id))
+  const extra = allWindows.filter((win) => {
+    if (seen.has(win.id)) return false
+    return isDockable(win) && isWeChatWindow(win, pidSet, owners)
+  })
+  return extra.length > 0 ? [...onScreen, ...extra] : onScreen
+}
+
+/**
  * Pick the on-screen main chat window.
  * Identity comes from the bundle PID, then the owner name.
  * A blank title — common without Screen Recording — still matches.

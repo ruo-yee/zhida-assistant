@@ -4,6 +4,7 @@ import { parseWeChatPresence } from '../../src/dock/parse.ts'
 import {
   mergeVisibleSession,
   parseVisibleChatReport,
+  pickPositionedTitle,
   pickVisibleTitle,
   resolveChatTitle,
   type VisibleChatReport,
@@ -12,7 +13,7 @@ import { electronAccessibilityTrusted } from '../accessibility.ts'
 import { DARWIN_APPLESCRIPT, DARWIN_ONSCREEN_SCRIPT, DARWIN_VISIBLE_SCRIPT } from '../hostScripts.ts'
 import { runCommand } from '../runCommand.ts'
 import type { AxView } from './axDriver.ts'
-import { readAxChatTitle } from './macNative.ts'
+import { readAxChatTitle, readChatWindowId } from './macNative.ts'
 import { readOcrChat } from './titleOcr.ts'
 import { wechatProcessAlive } from './processAlive.ts'
 
@@ -25,8 +26,7 @@ export async function readVisibleChat(onScreen = false): Promise<VisibleChatRepo
     const rich = await runCommand('osascript', ['-e', DARWIN_ONSCREEN_SCRIPT], 3500)
     const report = parseVisibleChatReport(rich.stdout)
     if (!report || report === 'hidden') return null
-    const title = pickVisibleTitle(report.title, report.lines) || (report.title === '微信' ? '' : report.title)
-    return { title, lines: report.lines }
+    return titledReport(report)
   }
   const quick = await runCommand('osascript', ['-e', DARWIN_APPLESCRIPT], 2500)
   const presence = parseWeChatPresence(`${quick.stdout}\n${quick.stderr}`)
@@ -35,11 +35,18 @@ export async function readVisibleChat(onScreen = false): Promise<VisibleChatRepo
   const rich = await runCommand('osascript', ['-e', DARWIN_VISIBLE_SCRIPT], 2000)
   const report = parseVisibleChatReport(`${rich.stdout}\n${rich.stderr}`)
   if (report && report !== 'hidden') {
-    const title = pickVisibleTitle(quickTitle, []) || pickVisibleTitle(report.title, report.lines) || report.title
-    return { title, lines: report.lines }
+    const seeded = usableTitle(quickTitle) ? { ...report, title: quickTitle } : report
+    return titledReport(seeded)
   }
   if (!usableTitle(quickTitle)) return { title: '', lines: [] }
   return { title: quickTitle, lines: [] }
+}
+
+function titledReport(report: VisibleChatReport): VisibleChatReport {
+  const named = usableTitle(report.title) ? report.title.trim() : ''
+  const band = pickPositionedTitle(report.bounds ?? null, report.placed ?? [])
+  const title = named || band || pickVisibleTitle('', report.lines)
+  return { ...report, title }
 }
 
 export function applyVisibleChat(view: AxView, report: VisibleChatReport | null): AxView {
@@ -129,7 +136,7 @@ export async function fillFromVisibleWindow(view: AxView): Promise<AxView> {
   if (!docked) return next
   next = adoptDockedWindow(next, docked.title)
   if (usableTitle(next.title) && next.transcript.length > 0) return next
-  const seen = await readOcrChat(docked.bounds)
+  const seen = await readOcrChat(docked.bounds, readChatWindowId())
   const title =
     resolveChatTitle({ windowTitle: next.title, visibleWindowTitle: docked.title, ocrTitle: seen.title }) || next.title
   const transcript = next.transcript.length > 0 ? next.transcript : seen.lines

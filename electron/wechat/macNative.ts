@@ -3,10 +3,19 @@ import { pickComposer, type ComposerShape } from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
-import { WECHAT_OWNER_NAMES, type WeChatWindowSnapshot } from '../../src/dock/wechatWindow.ts'
+import {
+  chooseChatWindow,
+  mergeChatWindows,
+  WECHAT_OWNER_NAMES,
+  type ListedWindow,
+  type WeChatWindowSnapshot,
+} from '../../src/dock/wechatWindow.ts'
 
 const UTF8 = 0x08000100
 const ON_SCREEN = 1
+const ALL_WINDOWS = 0
+const INCLUDING_WINDOW = 8
+const IMAGE_IGNORE_FRAMING = 1
 const PROC_ALL_PIDS = 1
 const FLOAT64 = 6
 
@@ -28,6 +37,9 @@ interface Native {
   snapshot(selfPid: number): WeChatWindowSnapshot
   chatTitle(target: Frame | null): AxChatRead
   composer(target: Frame | null, text: string | null): AxComposer
+  screenGranted(): boolean
+  captureTitle(windowId: number, crop: Frame, file: string): boolean
+  chatWindowId(): number
 }
 
 /**
@@ -81,6 +93,42 @@ export function writeAxComposer(target: Frame | null, text: string, hostTrusted:
   }
 }
 
+/** In-process Screen Recording preflight. Null when this process cannot ask. */
+export function screenCaptureGranted(): boolean | null {
+  const api = lib()
+  if (!api) return null
+  try {
+    return api.screenGranted()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Capture the title band inside this process. A grant on 智答助手 does not
+ * apply to osascript, so the preflight must not run there.
+ */
+export function writeTitleCapture(windowId: number, crop: Frame, file: string): boolean {
+  const api = lib()
+  if (!api) return false
+  try {
+    return api.captureTitle(windowId, crop, file)
+  } catch {
+    return false
+  }
+}
+
+/** Window id for OCR. The full list is used when the on-screen list omits WeChat. */
+export function readChatWindowId(): number {
+  const api = lib()
+  if (!api) return 0
+  try {
+    return api.chatWindowId()
+  } catch {
+    return 0
+  }
+}
+
 export function readAxChatTitle(target: Frame | null, hostTrusted: boolean): AxChatRead | null {
   if (!hostTrusted) return { state: 'none', title: '' }
   const key = target ? `${Math.round(target.x)}:${Math.round(target.y)}:${Math.round(target.width)}:${Math.round(target.height)}` : ''
@@ -112,6 +160,7 @@ function bindNative(): Native {
     }
     decode(ptr: bigint, type: string): unknown
     opaque(name: string): unknown
+    struct(name: string, fields: Record<string, string>): unknown
   }
   const cf = koffi.load('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
   const cg = koffi.load('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
@@ -133,7 +182,46 @@ function bindNative(): Native {
   const CFArrayGetCount = cf.func('int64 CFArrayGetCount(void *array)')
   const CFArrayGetValueAtIndex = cf.func('void *CFArrayGetValueAtIndex(void *array, int64 index)')
   const CFBooleanGetValue = cf.func('uint8 CFBooleanGetValue(void *value)')
-  const boolTrue = koffi.decode(cf.symbol('kCFBooleanTrue'), 'void *')
+  const boolTrue = loadBooleanTrue()
+
+  function loadBooleanTrue() {
+    const accept = (value: unknown) => {
+      if (!alive(value)) return null
+      try {
+        if (!sameType(CFGetTypeID(value), boolType)) return null
+        if (Number(CFBooleanGetValue(value)) !== 1) return null
+        return value
+      } catch {
+        return null
+      }
+    }
+    try {
+      const decoded = accept(koffi.decode(cf.symbol('kCFBooleanTrue'), 'void *'))
+      if (decoded) return decoded
+    } catch {
+      /* the symbol name can fail to resolve; dlsym is the same constant */
+    }
+    try {
+      const dlsym = libc.func('void *dlsym(void *handle, const char *name)')
+      const symbol = dlsym(-2, 'kCFBooleanTrue')
+      const decoded = accept(alive(symbol) ? koffi.decode(symbol as bigint, 'void *') : null)
+      if (decoded) return decoded
+    } catch {
+      /* RTLD_DEFAULT is unavailable */
+    }
+    try {
+      const objc = koffi.load('/usr/lib/libobjc.A.dylib')
+      const getClass = objc.func('void *objc_getClass(const char *name)')
+      const sel = objc.func('void *sel_registerName(const char *name)')
+      const msg = objc.func('void *objc_msgSend(void *self, void *sel, uint8 value)')
+      const created = msg(getClass('NSNumber'), sel('numberWithBool:'), 1)
+      const decoded = accept(created)
+      if (decoded) return decoded
+    } catch {
+      /* a CFBoolean is required; an NSNumber of the wrong type is ignored */
+    }
+    return null
+  }
 
   const CGWindowListCopyWindowInfo = cg.func('void *CGWindowListCopyWindowInfo(uint32 option, uint32 relative)')
   const procListPids = libc.func('int proc_listpids(uint32 type, uint32 typeinfo, void *buffer, int size)')
@@ -299,12 +387,12 @@ function bindNative(): Native {
     return found
   }
 
-  function windowsOnScreen() {
-    const list = CGWindowListCopyWindowInfo(ON_SCREEN, 0)
+  function copyWindowList(option: number): ListedWindow[] {
+    const list = CGWindowListCopyWindowInfo(option, 0)
     if (!alive(list)) return []
     try {
       const count = Math.min(Number(CFArrayGetCount(list)) || 0, 800)
-      const windows = []
+      const windows: ListedWindow[] = []
       for (let index = 0; index < count; index += 1) {
         const item = CFArrayGetValueAtIndex(list, index)
         const bounds = dictValue(item, 'kCGWindowBounds')
@@ -326,10 +414,36 @@ function bindNative(): Native {
     }
   }
 
+  function windowsOnScreen() {
+    return copyWindowList(ON_SCREEN)
+  }
+
+  /** Pids that own a WeChat window, including ones the on-screen list omits. */
+  function chatProcesses() {
+    const procs = wechatPids()
+    const known = new Set(procs.map((item) => item.pid))
+    const owners = new Set<string>(WECHAT_OWNER_NAMES)
+    let listed: ListedWindow[] = []
+    try {
+      listed = [...copyWindowList(ON_SCREEN), ...copyWindowList(ALL_WINDOWS)]
+    } catch {
+      listed = []
+    }
+    for (const win of listed) {
+      if (win.pid <= 0 || known.has(win.pid)) continue
+      if (!owners.has(win.owner) && win.title !== '微信') continue
+      known.add(win.pid)
+      procs.push({ pid: win.pid, path: '' })
+    }
+    return procs
+  }
+
   function axWindows(root: unknown) {
     const nodes: unknown[] = []
+    const focused = copyAttr(root, 'AXFocusedWindow')
+    if (alive(focused)) nodes.push(keep(focused))
     const main = copyAttr(root, 'AXMainWindow')
-    if (alive(main)) nodes.push(keep(main))
+    if (alive(main) && !nodes.includes(main)) nodes.push(keep(main))
     const raw = copyAttr(root, 'AXWindows')
     if (alive(raw)) {
       try {
@@ -342,7 +456,80 @@ function bindNative(): Native {
         CFRelease(raw)
       }
     }
+    // WeChat 4 can leave AXWindows empty and AXMainWindow at -25212 while a
+    // window still sits under AXChildren. Menu bars are not windows.
+    if (nodes.length === 0) collectChildWindows(root, nodes, 0)
     return nodes
+  }
+
+  function collectChildWindows(element: unknown, nodes: unknown[], depth: number) {
+    if (depth > 2 || nodes.length > 8) return
+    const children = read(element, 'AXChildren')
+    if (!Array.isArray(children)) return
+    for (const child of children) {
+      const role = typeof read(child, 'AXRole') === 'string' ? String(read(child, 'AXRole')) : ''
+      if (role === 'AXWindow') {
+        if (!nodes.includes(child)) nodes.push(child)
+        continue
+      }
+      if (role === 'AXMenuBar' || role === 'AXMenuBarItem') continue
+      collectChildWindows(child, nodes, depth + 1)
+    }
+  }
+
+  const screenCheck = bindScreenCheck()
+  const saveTitleImage = bindTitleCapture()
+
+  function bindScreenCheck(): (() => boolean) | null {
+    try {
+      const preflight = cg.func('uint8 CGPreflightScreenCaptureAccess()')
+      return () => {
+        try {
+          return Number(preflight()) === 1
+        } catch {
+          return false
+        }
+      }
+    } catch {
+      return null
+    }
+  }
+
+  function bindTitleCapture(): ((windowId: number, crop: Frame, file: string) => boolean) | null {
+    try {
+      koffi.struct('ZhidaRect', { x: 'double', y: 'double', width: 'double', height: 'double' })
+      const createImage = cg.func('void *CGWindowListCreateImage(ZhidaRect rect, uint32 options, uint32 windowId, uint32 imageOptions)')
+      const releaseImage = cg.func('void CGImageRelease(void *image)')
+      const imageio = koffi.load('/System/Library/Frameworks/ImageIO.framework/ImageIO')
+      const destCreate = imageio.func('void *CGImageDestinationCreateWithURL(void *url, void *type, size_t count, void *options)')
+      const destAdd = imageio.func('void CGImageDestinationAddImage(void *dest, void *image, void *props)')
+      const destFinal = imageio.func('uint8 CGImageDestinationFinalize(void *dest)')
+      const urlCreate = cf.func('void *CFURLCreateWithFileSystemPath(void *alloc, void *path, int style, uint8 isDir)')
+      return (windowId, crop, file) => {
+        const rect = { x: crop.x, y: crop.y, width: crop.width, height: crop.height }
+        let image = windowId > 0 ? createImage(rect, INCLUDING_WINDOW, windowId, IMAGE_IGNORE_FRAMING) : null
+        if (!alive(image)) image = createImage(rect, ON_SCREEN, 0, IMAGE_IGNORE_FRAMING)
+        if (!alive(image)) return false
+        const pathString = CFStringCreate(null, file, UTF8)
+        const url = alive(pathString) ? urlCreate(null, pathString, 0, 0) : null
+        const dest = alive(url) ? destCreate(url, key('public.png'), 1, null) : null
+        let ok = false
+        try {
+          if (alive(dest)) {
+            destAdd(dest, image, null)
+            ok = Number(destFinal(dest)) === 1
+          }
+        } finally {
+          if (alive(dest)) CFRelease(dest)
+          if (alive(url)) CFRelease(url)
+          if (alive(pathString)) CFRelease(pathString)
+          releaseImage(image)
+        }
+        return ok
+      }
+    } catch {
+      return null
+    }
   }
 
   return {
@@ -370,7 +557,7 @@ function bindNative(): Native {
       }
     },
     chatTitle(target: Frame | null): AxChatRead {
-      const procs = wechatPids()
+      const procs = chatProcesses()
       const main = procs.find((item) => rankPath(item.path) === 0)
       // A docked on-screen frame means the chat is visible. A flaky isHidden
       // must not skip the tree, or the session stays 「当前微信会话」.
@@ -418,7 +605,7 @@ function bindNative(): Native {
     },
     composer(target: Frame | null, text: string | null): AxComposer {
       const empty: AxComposer = { found: false, value: null, title: '' }
-      const procs = wechatPids()
+      const procs = chatProcesses()
       const main = procs.find((item) => rankPath(item.path) === 0)
       if (!target && main && appHidden(main.pid)) return empty
       try {
@@ -451,6 +638,35 @@ function bindNative(): Native {
         releaseOwned()
       }
       return empty
+    },
+    screenGranted() {
+      return screenCheck ? screenCheck() : false
+    },
+    captureTitle(windowId: number, crop: Frame, file: string) {
+      if (!saveTitleImage) return false
+      try {
+        return saveTitleImage(windowId, crop, file)
+      } catch {
+        return false
+      }
+    },
+    chatWindowId() {
+      try {
+        const procs = wechatPids()
+        const onScreen = copyWindowList(ON_SCREEN)
+        const all = copyWindowList(ALL_WINDOWS)
+        const pids = new Set(procs.map((item) => item.pid))
+        const owners = new Set<string>(WECHAT_OWNER_NAMES)
+        for (const win of [...onScreen, ...all]) {
+          if (win.pid > 0 && owners.has(win.owner)) pids.add(win.pid)
+        }
+        const merged = mergeChatWindows(onScreen, all, [...pids])
+        const pool = merged.filter((win) => win.layer === 0 && (pids.has(win.pid) || owners.has(win.owner)))
+        const chosen = chooseChatWindow(pool)
+        return chosen && chosen.width >= 240 && chosen.height >= 240 ? chosen.id : 0
+      } catch {
+        return 0
+      }
     },
   }
 

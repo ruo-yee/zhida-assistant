@@ -48,9 +48,19 @@ export function realChatTitle(value: string) {
   return raw
 }
 
+export interface PlacedText {
+  x: number
+  y: number
+  text: string
+}
+
 export interface VisibleChatReport {
   title: string
   lines: string[]
+  /** Screen bounds of the same window, when System Events reported them. */
+  bounds?: { x: number; y: number; width: number; height: number } | null
+  /** Static texts with positions, so the title band can be chosen like OCR. */
+  placed?: PlacedText[]
 }
 
 /** System Events `TITLE` / `LINE` rows. `HIDDEN` means the app is up but not on screen. */
@@ -60,9 +70,26 @@ export function parseVisibleChatReport(stdout: string): VisibleChatReport | 'hid
   if (rows.every((line) => line.toUpperCase() === 'HIDDEN')) return 'hidden'
   let title = ''
   const lines: string[] = []
+  const placed: PlacedText[] = []
+  let bounds: VisibleChatReport['bounds'] = null
   for (const row of rows) {
     if (row.startsWith('TITLE\t') || row.startsWith('TITLE ')) {
       title = row.slice(6).trim()
+      continue
+    }
+    if (row.startsWith('BOUNDS\t') || row.startsWith('BOUNDS ')) {
+      const parts = row.slice(7).split('\t').map((part) => Number(part))
+      if (parts.length >= 4 && parts.every((part) => Number.isFinite(part)) && parts[2] > 0 && parts[3] > 0) {
+        bounds = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] }
+      }
+      continue
+    }
+    if (row.startsWith('POS\t') || row.startsWith('POS ')) {
+      const parts = row.slice(4).split('\t')
+      const y = Number(parts[0])
+      const x = Number(parts[1])
+      const text = parts.slice(2).join('\t').trim()
+      if (text && Number.isFinite(x) && Number.isFinite(y)) placed.push({ x, y, text })
       continue
     }
     if (row.startsWith('LINE\t') || row.startsWith('LINE ')) {
@@ -70,8 +97,8 @@ export function parseVisibleChatReport(stdout: string): VisibleChatReport | 'hid
       if (text) lines.push(text)
     }
   }
-  if (!title && lines.length === 0) return null
-  return { title, lines }
+  if (!title && lines.length === 0 && placed.length === 0) return null
+  return { title, lines, bounds, placed }
 }
 
 /**
@@ -85,7 +112,21 @@ export function pickVisibleTitle(windowTitle: string, lines: string[]) {
     const text = line.trim()
     return text.length <= 40 && GROUP_TITLE.test(text) && !CHROME.has(text)
   })
-  return header?.trim() ?? ''
+  if (header) return header.trim()
+  // A private chat has no member count. System Events still returns the
+  // header as a short Latin name such as bulaji. Message lines are not names.
+  for (const line of lines) {
+    const title = latinChatName(line)
+    if (title) return title
+  }
+  return ''
+}
+
+function latinChatName(value: string) {
+  const title = realChatTitle(value)
+  if (!title) return ''
+  const bare = stripCountSuffix(title)
+  return /^[A-Za-z0-9_-]{3,32}$/.test(bare) ? title : ''
 }
 
 export function pickVisibleLines(lines: string[], title: string) {
@@ -108,10 +149,10 @@ export function mergeVisibleSession<T extends { hasWindow: boolean; title: strin
   report: VisibleChatReport | null,
 ): T {
   if (!report) return view
-  const title =
-    resolveChatTitle({ windowTitle: view.title, visibleWindowTitle: report.title }) ||
-    pickVisibleTitle('', report.lines) ||
-    view.title
+  const named = usableTitle(report.title) ? report.title.trim() : ''
+  const band = named ? '' : pickPositionedTitle(report.bounds ?? null, report.placed ?? [])
+  const listed = named || band || pickVisibleTitle('', report.lines)
+  const title = resolveChatTitle({ windowTitle: view.title, visibleWindowTitle: listed }) || view.title
   const transcript = view.transcript.length > 0 ? view.transcript : pickVisibleLines(report.lines, title)
   // A report only exists when System Events sees an on-screen window.
   return { ...view, hasWindow: true, title, transcript }
@@ -153,6 +194,27 @@ export function titleRowTexts(observations: OcrObservation[]) {
   })
   row.sort((a, b) => a.x - b.x)
   return row.map((item) => item.text.trim())
+}
+
+/**
+ * Header inside the conversation title band. Same crop as OCR, using
+ * System Events positions when the accessibility window list is empty.
+ */
+export function pickPositionedTitle(
+  bounds: { x: number; y: number; width: number; height: number } | null,
+  placed: PlacedText[],
+) {
+  if (!bounds || placed.length === 0) return ''
+  const crop = conversationCrop(bounds)
+  const inBand = placed.filter(
+    (item) =>
+      item.x >= crop.x - 4 &&
+      item.x <= crop.x + crop.width + 4 &&
+      item.y >= crop.y - 4 &&
+      item.y <= crop.y + crop.height + 8,
+  )
+  if (inBand.length === 0) return ''
+  return pickOcrTitle(titleRowTexts(inBand.map((item) => ({ y: item.y, x: item.x, height: 18, text: item.text }))))
 }
 
 /** Title from the top text row only. Lower lines stay available as messages. */

@@ -4,18 +4,7 @@ import path from 'node:path'
 import { conversationCrop, parseOcrObservations, pickOcrChat } from '../../src/dock/sessionReport.ts'
 import type { HostWindow } from '../../src/dock/types.ts'
 import { runCommand } from '../runCommand.ts'
-
-const PREFLIGHT = `
-ObjC.import('CoreGraphics')
-function run() {
-  try {
-    if (typeof $.CGPreflightScreenCaptureAccess !== 'function') return 'skip'
-    return $.CGPreflightScreenCaptureAccess() ? 'ok' : 'denied'
-  } catch (error) {
-    return 'skip'
-  }
-}
-`
+import { readChatWindowId, screenCaptureGranted, writeTitleCapture } from './macNative.ts'
 
 const VISION = `
 ObjC.import('Foundation')
@@ -76,8 +65,9 @@ async function screenCaptureAllowed() {
     captureAllowed = false
     return false
   }
-  const result = await runCommand('osascript', ['-l', 'JavaScript', '-e', PREFLIGHT], 2000)
-  captureAllowed = result.stdout.trim() === 'ok'
+  // osascript is a different TCC client. The reference asks in-process.
+  const granted = screenCaptureGranted()
+  captureAllowed = granted === true
   return captureAllowed
 }
 
@@ -85,7 +75,7 @@ async function screenCaptureAllowed() {
  * OCR the open conversation only after Accessibility and System Events have
  * no chat name. Never asks for Screen Recording; a missing grant skips it.
  */
-export async function readOcrChat(bounds: HostWindow): Promise<{ title: string; lines: string[] }> {
+export async function readOcrChat(bounds: HostWindow, windowId = 0): Promise<{ title: string; lines: string[] }> {
   const empty = { title: '', lines: [] as string[] }
   const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`
   if (cached && cached.key === key && Date.now() - cached.at < 2000) return cached.value
@@ -94,12 +84,18 @@ export async function readOcrChat(bounds: HostWindow): Promise<{ title: string; 
   const dir = await mkdtemp(path.join(tmpdir(), 'zhida-ocr-'))
   const file = path.join(dir, 'chat.png')
   try {
-    const shot = await runCommand(
-      'screencapture',
-      ['-x', '-R', `${crop.x},${crop.y},${crop.width},${crop.height}`, file],
-      3000,
-    )
-    if (shot.code !== 0) return empty
+    const id = windowId > 0 ? windowId : readChatWindowId()
+    let wrote = id > 0 && writeTitleCapture(id, crop, file)
+    if (!wrote) wrote = writeTitleCapture(0, crop, file)
+    if (!wrote) {
+      const shot = await runCommand(
+        'screencapture',
+        ['-x', '-R', `${crop.x},${crop.y},${crop.width},${crop.height}`, file],
+        3000,
+      )
+      wrote = shot.code === 0
+    }
+    if (!wrote) return empty
     const seen = await runCommand('osascript', ['-l', 'JavaScript', '-e', VISION, file], 4000)
     const value = pickOcrChat(parseOcrObservations(seen.stdout))
     cached = { at: Date.now(), key, value }

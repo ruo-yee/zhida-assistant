@@ -76,6 +76,11 @@ tell application "System Events"
   set bestArea to 0
   set bestTitle to ""
   set bestLines to {}
+  set bestPlaced to {}
+  set bestX to 0
+  set bestY to 0
+  set bestW to 0
+  set bestH to 0
   set sawProcess to false
   repeat with procName in procNames
     if exists (process procName) then
@@ -116,6 +121,17 @@ tell application "System Events"
                     set bestTitle to name of w
                   end try
                   set bestLines to {}
+                  set bestPlaced to {}
+                  set bestW to winW
+                  set bestH to winH
+                  try
+                    set winPos to position of w
+                    set bestX to item 1 of winPos
+                    set bestY to item 2 of winPos
+                  end try
+                  try
+                    set bestPlaced to every static text of w
+                  end try
                   try
                     set bestLines to value of every static text of w
                   end try
@@ -132,6 +148,7 @@ tell application "System Events"
     return ""
   end if
   set payload to "TITLE" & tab & bestTitle & linefeed
+  set payload to payload & "BOUNDS" & tab & bestX & tab & bestY & tab & bestW & tab & bestH & linefeed
   set total to 0
   try
     if class of bestLines is text then set bestLines to {bestLines}
@@ -146,6 +163,24 @@ tell application "System Events"
         set piece to my flatten(piece)
         if (length of piece) >= 2 and (length of piece) < 180 then
           set payload to payload & "LINE" & tab & piece & linefeed
+        end if
+      end try
+    end repeat
+  end if
+  set placedCount to 0
+  try
+    set placedCount to count of bestPlaced
+  end try
+  if placedCount > 60 then set placedCount to 60
+  if placedCount > 0 then
+    repeat with i from 1 to placedCount
+      try
+        set node to item i of bestPlaced
+        set piece to value of node as text
+        set piece to my flatten(piece)
+        set nodePos to position of node
+        if (length of piece) >= 2 and (length of piece) < 180 then
+          set payload to payload & "POS" & tab & (item 2 of nodePos as text) & tab & (item 1 of nodePos as text) & tab & piece & linefeed
         end if
       end try
     end repeat
@@ -182,6 +217,11 @@ tell application "System Events"
   set bestArea to 0
   set bestTitle to ""
   set bestLines to {}
+  set bestPlaced to {}
+  set bestX to 0
+  set bestY to 0
+  set bestW to 0
+  set bestH to 0
   repeat with procName in procNames
     if exists (process procName) then
       tell process procName
@@ -197,6 +237,17 @@ tell application "System Events"
                 set bestTitle to name of w
               end try
               set bestLines to {}
+              set bestPlaced to {}
+              set bestW to winW
+              set bestH to winH
+              try
+                set winPos to position of w
+                set bestX to item 1 of winPos
+                set bestY to item 2 of winPos
+              end try
+              try
+                set bestPlaced to every static text of w
+              end try
               try
                 set bestLines to value of every static text of w
               end try
@@ -208,6 +259,7 @@ tell application "System Events"
   end repeat
   if bestArea is 0 then return ""
   set payload to "TITLE" & tab & bestTitle & linefeed
+  set payload to payload & "BOUNDS" & tab & bestX & tab & bestY & tab & bestW & tab & bestH & linefeed
   set total to 0
   try
     if class of bestLines is text then set bestLines to {bestLines}
@@ -222,6 +274,24 @@ tell application "System Events"
         set piece to my flatten(piece)
         if (length of piece) >= 2 and (length of piece) < 180 then
           set payload to payload & "LINE" & tab & piece & linefeed
+        end if
+      end try
+    end repeat
+  end if
+  set placedCount to 0
+  try
+    set placedCount to count of bestPlaced
+  end try
+  if placedCount > 60 then set placedCount to 60
+  if placedCount > 0 then
+    repeat with i from 1 to placedCount
+      try
+        set node to item i of bestPlaced
+        set piece to value of node as text
+        set piece to my flatten(piece)
+        set nodePos to position of node
+        if (length of piece) >= 2 and (length of piece) < 180 then
+          set payload to payload & "POS" & tab & (item 2 of nodePos as text) & tab & (item 1 of nodePos as text) & tab & piece & linefeed
         end if
       end try
     end repeat
@@ -245,6 +315,56 @@ on swap(value, needle, replacement)
   set AppleScript's text item delimiters to ""
   return joined
 end swap
+`
+
+/**
+ * Largest text area of the visible WeChat window.
+ * Used when AXWindows is empty and the in-process tree has no composer.
+ * Read returns `VALUE` plus the current text. Write sets that value and does not press Return.
+ */
+export const DARWIN_COMPOSER_SCRIPT = `
+function run(argv) {
+  var mode = argv && argv[0] ? String(argv[0]) : 'read'
+  var text = argv && argv.length > 1 ? String(argv[1]) : ''
+  var system = Application('System Events')
+  var names = ['微信', 'WeChat', 'Weixin', 'WeChatAppEx']
+  var best = null
+  var bestArea = 0
+  for (var n = 0; n < names.length; n++) {
+    try {
+      var proc = system.processes.byName(names[n])
+      if (!proc.exists()) continue
+      var windows = proc.windows()
+      for (var i = 0; i < windows.length; i++) {
+        var win = windows[i]
+        var size = [0, 0]
+        try { size = win.size() } catch (error) { size = [0, 0] }
+        if (!size || size[0] < 240 || size[1] < 240) continue
+        var areas = []
+        try { areas = win.textAreas() } catch (error) { areas = [] }
+        for (var j = 0; j < areas.length; j++) {
+          var box = areas[j]
+          var boxSize = [0, 0]
+          try { boxSize = box.size() } catch (error) { boxSize = [0, 0] }
+          var area = Number(boxSize[0]) * Number(boxSize[1])
+          if (boxSize[0] >= 80 && boxSize[1] >= 16 && area > bestArea) {
+            bestArea = area
+            best = box
+          }
+        }
+      }
+    } catch (error) {}
+  }
+  if (!best) return 'MISS'
+  try {
+    if (mode === 'write') best.value = text
+  } catch (error) {
+    return 'MISS'
+  }
+  var value = ''
+  try { value = String(best.value()) } catch (error) { value = '' }
+  return 'VALUE\\t' + value.replace(/[\\t\\r\\n]+/g, ' ')
+}
 `
 
 /** Win32 EnumWindows + GetWindowRect. Runs with powershell.exe on Windows. */

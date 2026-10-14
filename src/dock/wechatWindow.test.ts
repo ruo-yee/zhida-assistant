@@ -4,6 +4,7 @@ import {
   electronBoundsFromAppKit,
   electronBoundsFromQuartz,
   listedWindowOutcome,
+  mergeChatWindows,
   parseWeChatSnapshot,
   selectWeChatWindow,
   type ListedWindow,
@@ -228,6 +229,20 @@ describe('listedWindowOutcome', () => {
     )
     expect(found.reason).toBe('screen-recording')
     expect(found.bounds).toBeNull()
+  })
+})
+
+describe('mergeChatWindows', () => {
+  it('keeps a visible WeChat window from the full list when the on-screen list omits it', () => {
+    const hidden = win({ pid: 10, owner: '微信', title: '微信', width: 915, height: 693, id: 42, x: 0, y: 111 })
+    const merged = mergeChatWindows([], [hidden], [10])
+    expect(merged).toEqual([hidden])
+  })
+
+  it('does not add an off-screen window when an on-screen chat window already exists', () => {
+    const visible = win({ pid: 10, owner: '微信', title: '微信', width: 915, height: 693, id: 7 })
+    const other = win({ pid: 10, owner: '微信', title: '微信', width: 400, height: 300, id: 8, x: -2000 })
+    expect(mergeChatWindows([visible], [visible, other], [10])).toEqual([visible])
   })
 })
 
