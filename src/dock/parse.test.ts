@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAssistivePermissionError, parseBoundsLine, parseBoundsReport } from './parse.ts'
+import { isAssistivePermissionError, parseBoundsLine, parseBoundsReport, parseWeChatPresence } from './parse.ts'
 import { describeDock } from './status.ts'
 
 describe('parseBoundsReport', () => {
@@ -18,6 +18,19 @@ describe('parseBoundsReport', () => {
     expect(parseBoundsReport(report)?.title).toBe('微信')
     expect(parseBoundsReport('')).toBeNull()
     expect(parseBoundsReport('not-a-window')).toBeNull()
+    expect(parseBoundsReport('0,111,915,693')).toEqual({
+      x: 0,
+      y: 111,
+      width: 915,
+      height: 693,
+      title: '微信',
+    })
+  })
+
+  it('treats a hidden or minimized WeChat report as not dockable', () => {
+    expect(parseWeChatPresence('hidden')).toEqual({ presence: 'hidden', bounds: null })
+    expect(parseWeChatPresence('0,111,915,693,微信').presence).toBe('visible')
+    expect(parseWeChatPresence('').presence).toBe('absent')
   })
 
   it('recognizes an assistive-access failure', () => {
@@ -34,5 +47,9 @@ describe('describeDock', () => {
     expect(describeDock({ platform: 'win32', reason: 'not-running' }).mode).toBe('floating')
     expect(describeDock({ platform: 'linux', reason: 'unsupported-platform' }).detail).toContain('悬浮窗')
     expect(describeDock({ platform: 'darwin', reason: 'permission' }).detail).toContain('辅助功能')
+    expect(describeDock({ platform: 'darwin', reason: 'permission' }).detail).not.toContain('重新贴')
+    expect(describeDock({ platform: 'darwin', reason: 'permission' }).needsAccessibility).toBe(true)
+    expect(describeDock({ platform: 'darwin', reason: 'screen-recording' }).needsScreenRecording).toBe(true)
+    expect(describeDock({ platform: 'darwin', reason: 'hidden' }).detail).toContain('没有可见的主窗口')
   })
 })

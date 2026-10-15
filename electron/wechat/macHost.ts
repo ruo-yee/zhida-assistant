@@ -1,15 +1,19 @@
 import path from 'node:path'
 import { homedir } from 'node:os'
+import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
-import type { WeChatMessage, WeChatSession } from '../../src/domain/wechat/WeChatBridge.ts'
+import { accessibilityDetail } from '../../src/domain/wechat/accessibilityCopy.ts'
+import type { WeChatMessage } from '../../src/domain/wechat/WeChatBridge.ts'
 import {
   NEED_AX,
   SendGuard,
-  confirmInserted,
-  planInsert,
+  cleanText,
   planSend,
   type ComposerView,
 } from '../../src/domain/wechat/composerPolicy.ts'
+import { describeLiveSession, liveSession } from '../../src/domain/wechat/liveSession.ts'
+import { dockedWeChat } from '../../src/dock/dockedSight.ts'
+import { resolveChatTitle } from '../../src/dock/sessionReport.ts'
 import { matchChat, usableTitle } from '../../src/domain/wechat/matchChat.ts'
 import {
   decodeMessageText,
@@ -18,6 +22,9 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
+import { insertWeChatText, readAxComposer } from './macNative.ts'
+import { readSystemComposer } from './systemComposer.ts'
+import { mergeComposerView, readDesktopSession } from './visibleSession.ts'
 import {
   accountIdFromRoot,
   appSupportDir,
@@ -67,73 +74,75 @@ export class MacWeChatHost {
   }
 
   private async inspect(): Promise<HostBridgeStatus> {
-    const view = await runAx('inspect')
+    const view = await readDesktopSession()
     const base = this.statusFrom(view)
     if (!view.running || !view.trusted || !view.hasWindow) return base
+    const composerText = view.composer?.trim() ?? ''
+    const transcript = view.transcript ?? []
     try {
       const loaded = await this.ensureLibrary()
-      if (!loaded.root || !loaded.entries) {
-        return { ...base, detail: loaded.detail, session: titleSession(view.title) }
-      }
-      const chats = await this.conversationIndex(loaded.root, loaded.entries)
-      const title = usableTitle(view.title)
-      const chat = matchChat(title, chats)
-      if (!title) return { ...base, dbReady: true, detail: '已连接微信，但没有读到当前会话标题。' }
-      if (!chat) {
-        return {
-          ...base,
-          dbReady: true,
-          detail: `已看到会话「${title}」，本地记录里没有唯一对应的联系人。`,
-          session: titleSession(title),
+      let db: {
+        id: string
+        peerName: string
+        chatType: 'private' | 'group'
+        messages: WeChatMessage[]
+      } | null = null
+      if (loaded.root && loaded.entries) {
+        const chats = await this.conversationIndex(loaded.root, loaded.entries)
+        const title = usableTitle(view.title)
+        const chat = title ? matchChat(title, chats) : null
+        if (chat) {
+          db = {
+            id: `wechat:${chat.chatId}`,
+            peerName: chat.chatName,
+            chatType: chat.group ? 'group' : 'private',
+            messages: await this.recentMessages(loaded.root, loaded.entries, chat),
+          }
         }
       }
-      const messages = await this.recentMessages(loaded.root, loaded.entries, chat)
+      const session = liveSession({ hasWindow: true, title: view.title, transcript, composerText, db })
+      const fromDatabase = Boolean(db && db.messages.length > 0)
       return {
         ...base,
-        dbReady: true,
+        dbReady: Boolean(loaded.root && loaded.entries),
         available: true,
-        detail: `正在跟随微信会话「${chat.chatName}」。`,
-        session: {
-          id: `wechat:${chat.chatId}`,
-          peerName: chat.chatName,
-          presence: 'online',
-          chatType: chat.group ? 'group' : 'private',
-          composerText: view.composer?.trim() ?? '',
-          messages,
-        },
+        detail: session ? describeLiveSession(session, fromDatabase) : loaded.detail,
+        session,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '读微信记录失败'
-      return { ...base, detail: message, session: titleSession(view.title) }
+      return {
+        ...base,
+        detail: message,
+        session: liveSession({ hasWindow: true, title: view.title, transcript, composerText, db: null }),
+      }
     }
   }
 
   private async insert(text: string): Promise<HostActionResult> {
-    const view = await runAx('inspect')
-    const plan = planInsert(toComposer(view), text)
-    if (plan.action === 'refuse') return handled(false, plan.reason)
-    if (plan.action !== 'set') return handled(false, '没有可插入的内容')
-    const claimed = this.guard.claim('insert', view.windowId, plan.text, Date.now())
+    const view = await this.composerView()
+    const typed = cleanText(text)
+    if (!typed) return handled(false, '没有可插入的内容')
+    if (!view.trusted) return handled(false, refuseReason(NEED_AX))
+    if (!view.running) return handled(false, '微信没有运行')
+    if (!view.hasWindow) return handled(false, '没找到微信主窗口（微信可能已最小化或隐藏）')
+    const claimed = this.guard.claim('insert', view.windowId, typed, Date.now())
     if (!claimed.ok) return handled(false, claimed.reason)
     let sent = false
     try {
-      const written = await runAx('set', plan.text)
-      const confirmed = confirmInserted(written.composer, plan.text, sameTitle(view.title, written.title))
-      if (confirmed.action === 'refuse') {
-        if (confirmed.reason.includes('会话已变化')) await runAx('clear')
-        return handled(false, confirmed.reason)
-      }
-      sent = true
-      return handled(true, '已插入')
+      const attempt = insertWeChatText(chatFrame(), typed, view.title, view.trusted)
+      if (!attempt) return handled(false, '写入微信输入框失败')
+      sent = attempt.ok
+      return handled(attempt.ok, attempt.reason)
     } finally {
-      this.guard.finish('insert', view.windowId, plan.text, sent, Date.now())
+      this.guard.finish('insert', view.windowId, typed, sent, Date.now())
     }
   }
 
   private async send(text: string): Promise<HostActionResult> {
-    const view = await runAx('inspect')
+    const view = await this.composerView()
     const plan = planSend(toComposer(view), text)
-    if (plan.action === 'refuse') return handled(false, plan.reason)
+    if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
     if (plan.action === 'return') return this.pressReturn(view, plan.text)
     const inserted = await this.insert(plan.text)
     if (!inserted.ok) return inserted
@@ -159,12 +168,34 @@ export class MacWeChatHost {
     }
   }
 
+  private async composerView(): Promise<AxView> {
+    const visible = await readDesktopSession()
+    if (!visible.trusted || !visible.running || !visible.hasWindow) return visible
+    const native = readAxComposer(chatFrame(), visible.trusted)
+    if (native?.found) {
+      const title = resolveChatTitle({ windowTitle: native.title, headerTitle: visible.title }) || visible.title
+      return {
+        ...visible,
+        hasWindow: true,
+        hasTextArea: true,
+        composer: native.value ?? '',
+        title,
+        reason: '',
+      }
+    }
+    const merged = mergeComposerView(visible, await runAx('inspect'))
+    if (merged.hasTextArea && merged.composer !== null) return merged
+    const system = await readSystemComposer()
+    if (system === null) return merged
+    return { ...merged, hasWindow: true, hasTextArea: true, composer: system, reason: '' }
+  }
+
   private statusFrom(view: AxView): HostBridgeStatus {
     let detail = '正在检查微信…'
-    if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
-    else if (!view.trusted) detail = NEED_AX
+    if (!view.trusted) detail = accessibilityDetail(app.isPackaged)
+    else if (!view.running) detail = '微信没有运行。打开后会读取当前会话。'
+    else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = '微信在运行，但还读不到窗口。'
     else if (!view.hasWindow) detail = '没找到微信主窗口（微信可能已最小化或隐藏）。'
-    else if (view.reason === '辅助功能调用失败' || view.reason === '辅助功能接口不存在') detail = view.reason
     else detail = usableTitle(view.title) ? `已识别微信会话「${usableTitle(view.title)}」。` : '已连接微信，但没有读到当前会话标题。'
     return {
       platform: 'darwin',
@@ -172,6 +203,7 @@ export class MacWeChatHost {
       axTrusted: view.trusted,
       wechatRunning: view.running,
       dbReady: false,
+      needsAccessibility: !view.trusted,
       detail,
       session: null,
     }
@@ -292,6 +324,12 @@ export class MacWeChatHost {
   }
 }
 
+function chatFrame() {
+  const bounds = dockedWeChat()?.bounds
+  if (!bounds) return null
+  return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+}
+
 function toComposer(view: AxView): ComposerView {
   return {
     trusted: view.trusted,
@@ -306,21 +344,13 @@ function sameTitle(before: string, after: string) {
   return usableTitle(before) === usableTitle(after)
 }
 
-function titleSession(title: string): WeChatSession | null {
-  const name = usableTitle(title)
-  if (!name) return null
-  return {
-    id: `wechat-title:${name}`,
-    peerName: name,
-    presence: 'online',
-    chatType: /[(（]\s*\d{1,5}/.test(title) ? 'group' : 'private',
-    composerText: '',
-    messages: [],
-  }
-}
-
 function handled(ok: boolean, reason: string): HostActionResult {
   return { ok, handled: true, reason }
+}
+
+function refuseReason(reason: string) {
+  if (reason !== NEED_AX) return reason
+  return accessibilityDetail(app.isPackaged)
 }
 
 function clock(seconds: number) {

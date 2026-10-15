@@ -1,7 +1,7 @@
 import { CompanionProvider, useCompanion } from './app/CompanionProvider.tsx'
 import { CompanionPane } from './components/CompanionPane.tsx'
-import { SettingsDialog } from './components/SettingsDialog.tsx'
 import { SourceDialog } from './components/SourceDialog.tsx'
+import { SendConfirm } from './components/SendConfirm.tsx'
 import { WeChatPane } from './components/WeChatPane.tsx'
 import { TooltipProvider } from './components/ui/tooltip.tsx'
 
@@ -28,7 +28,7 @@ function Shell() {
             className={app.mobilePane === 'wechat' ? 'is-on' : undefined}
             onClick={() => app.setMobilePane('wechat')}
           >
-            微信演示
+            演示窗
           </button>
           <button
             type="button"
@@ -42,10 +42,10 @@ function Shell() {
         </div>
       ) : null}
       <div className="stage flex min-h-0 flex-1">
-        <WeChatPane hidden={app.narrow && app.mobilePane !== 'wechat'} />
+        <WeChatPane hidden={app.narrow ? app.mobilePane !== 'wechat' : !app.showDemo} />
         <CompanionPane hidden={app.narrow && app.mobilePane !== 'companion'} />
       </div>
-      <SettingsDialog />
+      <SendConfirm />
       <SourceDialog />
       {app.toast ? (
         <div className="toast" role="status">

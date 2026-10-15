@@ -1,5 +1,11 @@
 import type { DockPlacement, Rect } from './types.ts'
 
+/**
+ * Flush the panel to WeChat's right edge, or the left edge when that side has
+ * no room. Match height and clamp to the display work area (the visible frame).
+ * `host` is already in Electron's top-left point space — the same orientation
+ * as CGWindowList — so this does not flip Y with the primary screen height.
+ */
 export function computeDockBounds(options: {
   host: Rect
   workArea: Rect

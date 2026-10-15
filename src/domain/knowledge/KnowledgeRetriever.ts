@@ -23,7 +23,11 @@ export interface KnowledgeRetriever {
   search(input: RetrievalInput): Promise<KnowledgeHit[]>
 }
 
-/** Latest question wins. A continuation such as「第二个问题」still searches the recent turns together. */
+/**
+ * Search text for the knowledge base only. This is not 上下文.
+ * 上下文 is the current WeChat conversation sent to the model.
+ * Latest question wins. A continuation such as「第二个问题」still searches the recent customer lines together.
+ */
 export function resolveRetrievalText(messages: RetrievalMessage[], docs: KnowledgeDoc[]) {
   const customer = messages.filter((message) => message.role === 'customer').slice(-4)
   const latest = customer.at(-1)?.text.trim() ?? ''

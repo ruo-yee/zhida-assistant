@@ -1,11 +1,37 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { DockStatus } from '../src/dock/types.ts'
+import type { FolderIndexResult } from '../src/domain/knowledge/indexStatus.ts'
 import type { HostActionResult, HostBridgeStatus } from '../src/domain/wechat/hostTypes.ts'
 
 contextBridge.exposeInMainWorld('zhida', {
   platform: process.platform,
   getDockStatus: (): Promise<DockStatus> => ipcRenderer.invoke('dock:get-status'),
   reattach: (): Promise<DockStatus> => ipcRenderer.invoke('dock:reattach'),
+  openAccessibilitySettings: (): Promise<boolean> => ipcRenderer.invoke('accessibility:open-settings'),
+  openScreenRecordingSettings: (): Promise<boolean> => ipcRenderer.invoke('screen:open-settings'),
+  readModelKey: (): Promise<string> => ipcRenderer.invoke('secret:get-model-key'),
+  writeModelKey: (key: string): Promise<void> => ipcRenderer.invoke('secret:set-model-key', key),
+  pickLibraryFolder: (kind: 'folder' | 'obsidian'): Promise<string> => ipcRenderer.invoke('library:pick', kind),
+  indexLibrary: (folder: string, kind: 'folder' | 'obsidian'): Promise<FolderIndexResult> =>
+    ipcRenderer.invoke('library:index', folder, kind),
+  watchLibrary: (folder: string, kind: 'folder' | 'obsidian', callback: () => void): (() => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('library:changed', listener)
+    void ipcRenderer.invoke('library:watch', folder, kind)
+    return () => {
+      ipcRenderer.removeListener('library:changed', listener)
+      void ipcRenderer.invoke('library:watch', '', 'folder')
+    }
+  },
+  pathForDroppedFile: (file: Parameters<typeof webUtils.getPathForFile>[0]): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
+  classifyLibrary: (folder: string): Promise<'folder' | 'obsidian' | 'unknown'> =>
+    ipcRenderer.invoke('library:classify', folder),
   onDockStatus: (callback: (status: DockStatus) => void) => {
     const listener = (_event: IpcRendererEvent, status: DockStatus) => callback(status)
     ipcRenderer.on('dock:status', listener)

@@ -10,12 +10,13 @@
   "scripts": {
     "dev": "concurrently -k -n web,shell \"vite --host 127.0.0.1 --port 43123 --strictPort\" \"wait-on http-get://127.0.0.1:43123 && npm run build:electron && electron . --dev\"",
     "dev:web": "vite --host 127.0.0.1 --port 43123 --strictPort",
-    "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.cjs --external:electron && esbuild electron/preload.ts --bundle --platform=node --format=cjs --outfile=dist-electron/preload.cjs --external:electron",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.cjs --external:electron --external:koffi && esbuild electron/preload.ts --bundle --platform=node --format=cjs --outfile=dist-electron/preload.cjs --external:electron",
     "build": "tsc -b && vite build",
     "start": "npm run build && npm run build:electron && electron .",
     "dist": "npm run build && npm run build:electron && electron-builder --linux --win --publish never",
     "dist:win": "npm run build && npm run build:electron && electron-builder --win --publish never",
-    "dist:mac": "npm run build && npm run build:electron && electron-builder --mac --publish never",
+    "dist:mac": "bash packaging/build_mac.sh",
+    "sign:mac-identity": "bash packaging/make_local_signing.sh",
     "dist:linux": "npm run build && npm run build:electron && electron-builder --linux --publish never",
     "lint": "oxlint",
     "test": "vitest run",
@@ -47,5 +48,8 @@
     "vite": "^8.3.0",
     "vitest": "^5.0.4",
     "wait-on": "^9.5.1"
+  },
+  "dependencies": {
+    "koffi": "^3.3.3"
   }
 }

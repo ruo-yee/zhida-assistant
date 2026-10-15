@@ -51,6 +51,13 @@ export const BUILTIN_PERSONAS: readonly PersonaRecord[] = [
   },
 ]
 
+/** Same customer message, three voices. Other personas stay in the overflow menu. */
+export const QUICK_PERSONAS = [
+  { id: 'support', label: '客服' },
+  { id: 'casual', label: '闲聊' },
+  { id: 'advisor', label: '顾问' },
+] as const
+
 const BUILTIN_IDS = new Set(BUILTIN_PERSONAS.map((persona) => persona.id))
 const NAME_LIMIT = 24
 const PROMPT_LIMIT = 2000
@@ -59,7 +66,7 @@ export const CUSTOM_PERSONA_LIMIT = 12
 export const TONE_HINT: Record<Persona, string> = {
   professional: '语气专业、简明，先给结论，适合直接发到微信。',
   warm: '语气亲切，先接住对方，再给结论。',
-  technical: '保留必要的机制说明，但不编造摘录或对话里没有的数字。',
+  technical: '保留必要的机制说明，但不编造当前会话或知识摘录里没有的数字。',
 }
 
 export function createPersonaId() {

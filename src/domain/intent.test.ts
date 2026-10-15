@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyIntent } from './intent.ts'
+import { classifyIntent, intentHint } from './intent.ts'
 
 describe('classifyIntent', () => {
   it('keeps the seeded permission question as 询问', () => {
@@ -12,6 +12,12 @@ describe('classifyIntent', () => {
     expect(classifyIntent('同步失败，客户端报错了')).toBe('故障')
     expect(classifyIntent('这个功能多少钱，怎么开通')).toBe('购买')
     expect(classifyIntent('我要投诉，等太久了')).toBe('投诉')
+  })
+
+  it('keeps the cue short', () => {
+    expect(intentHint('闲聊').text).toBe('闲聊，不必马上回')
+    expect(intentHint('投诉').tone).toBe('warn')
+    expect(intentHint('询问').text.length).toBeLessThan(24)
   })
 
   it('treats small talk and unanswered questions as 闲聊 or 询问', () => {

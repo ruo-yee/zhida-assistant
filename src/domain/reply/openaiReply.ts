@@ -1,3 +1,4 @@
+import { formatChatContext, type ChatTurn } from './chatContext.ts'
 import type { ReplyInput } from './ReplyGenerator.ts'
 import { parseReplyBatch } from './parseReplies.ts'
 import { TONE_HINT } from './personas.ts'
@@ -9,8 +10,48 @@ export interface ModelConfig {
   model: string
 }
 
+export function chatTurnsForPrompt(input: Pick<ReplyInput, 'customerText' | 'turns'>): ChatTurn[] {
+  if (input.turns && input.turns.length > 0) return input.turns
+  const text = input.customerText.trim()
+  return text ? [{ role: 'customer', text }] : []
+}
+
+/** Model messages. 上下文 is the current WeChat conversation; 知识摘录 is optional and is not 上下文. */
+export function buildModelMessages(input: ReplyInput) {
+  const turns = chatTurnsForPrompt(input)
+  const hasHits = input.hits.length > 0
+  const system = [
+    '你是微信旁边的回复起草助手。上下文指当前微信会话里的最近消息，不是知识库。',
+    '写回复时引用之前的对话：接上对方已经问过的，以及我已经回复过的。这段引用只来自当前微信会话，不要用知识摘录冒充之前的对话。',
+    `人设：${input.personaText}`,
+    `语气：${TONE_HINT[input.persona]}`,
+    input.grounding === 'grounded'
+      ? '先根据上下文里已经说过的话起草，再按人设和语气写出三条可直接发送的中文回复。知识摘录只作可选补充；摘录没有的数字、价格、时限和承诺不要写。'
+      : '先根据上下文里已经说过的话起草，再按人设和语气写出三条短回复，每条一两到三句，可直接发送。不要编造上下文和知识摘录里都没有的产品事实、价格、额度或政策。',
+    '三条之间用单独一行的 --- 分隔。不要标题，不要解释。',
+  ].join('\n')
+  const user = [
+    `人设：${input.personaText}`,
+    `语气：${TONE_HINT[input.persona]}`,
+    `意图：${input.intent}`,
+    '上下文（当前微信会话的最近消息。写回复时引用这些对话，不是知识库）：',
+    formatChatContext(turns),
+    hasHits ? '知识摘录（可选补充）：' : '知识摘录：没有。不要编造产品事实、价格、额度或政策。',
+    ...(hasHits
+      ? input.hits.map(
+          (hit, index) => `${index + 1}. ${hit.title} (${hit.version}) 相关度 ${hit.score.toFixed(2)}：${hit.excerpt}`,
+        )
+      : []),
+  ].join('\n')
+  return [
+    { role: 'system' as const, content: system },
+    { role: 'user' as const, content: user },
+  ]
+}
+
 export async function completeOpenAI(config: ModelConfig, input: ReplyInput): Promise<string[]> {
-  const base = (config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')
+  const base = config.baseUrl.trim().replace(/\/$/, '')
+  if (!base) throw new Error('no model endpoint')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 25000)
   const grounded = input.grounding === 'grounded'
@@ -24,30 +65,7 @@ export async function completeOpenAI(config: ModelConfig, input: ReplyInput): Pr
       body: JSON.stringify({
         model: config.model || 'gpt-4o-mini',
         temperature: grounded ? 0.4 : 0.7,
-        messages: [
-          {
-            role: 'system',
-            content: grounded
-              ? '你是微信旁边的回复起草助手。根据给定人设，写出三条可直接发送的中文回复，都要依据知识摘录，摘录没有的数字、价格、时限和承诺不要写。三条之间用单独一行的 --- 分隔。不要标题，不要解释。'
-              : '你是微信旁边的回复起草助手。对方这条更像日常聊天，或知识库没有够格的依据。根据给定人设写出三条短回复，每条一两到三句，可直接发送。不要编造产品事实、价格、额度或政策。三条之间用单独一行的 --- 分隔。不要标题，不要解释。',
-          },
-          {
-            role: 'user',
-            content: [
-              `人设：${input.personaText}`,
-              `语气：${TONE_HINT[input.persona]}`,
-              `意图：${input.intent}`,
-              `对方刚刚说：${input.customerText}`,
-              grounded ? '知识摘录：' : '不要引用不存在的文档。',
-              ...(grounded
-                ? input.hits.map(
-                    (hit, index) =>
-                      `${index + 1}. ${hit.title} (${hit.version}) 相关度 ${hit.score.toFixed(2)}：${hit.excerpt}`,
-                  )
-                : []),
-            ].join('\n'),
-          },
-        ],
+        messages: buildModelMessages(input),
       }),
     })
     if (!response.ok) throw new Error(`model ${response.status}`)

@@ -1,10 +1,19 @@
 import { BookOpen, Lightbulb, Moon, MoreHorizontal, Settings, Sparkles, Sun } from 'lucide-react'
+import { useState } from 'react'
 import { useCompanion } from '../app/CompanionProvider.tsx'
+import { intentHint } from '../domain/intent.ts'
+import { CHAT_CONTEXT_LIMIT } from '../domain/reply/chatContext.ts'
+import { citationForReply } from '../domain/reply/citation.ts'
+import { QUICK_PERSONAS } from '../domain/reply/personas.ts'
+import { isTodoLine, sessionGlance } from '../domain/reply/sessionGlance.ts'
+import { PENDING_SESSION_ID } from '../domain/wechat/liveSession.ts'
 import { formatChatType, formatResultCount, formatSessionChip } from '../domain/format.ts'
 import { ActionBar } from './ActionBar.tsx'
+import { SettingsPage } from './SettingsPage.tsx'
 import { DemoMenuItems } from './DemoMenu.tsx'
 import { DockStatusBar } from './DockStatusBar.tsx'
 import { KnowledgeCard } from './KnowledgeCard.tsx'
+import { CiteBadge } from './CiteBadge.tsx'
 import { ReplyCard } from './ReplyCard.tsx'
 import { EmptyState, ErrorState, ReplySkeleton, SkeletonState } from './States.tsx'
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dropdown.tsx'
@@ -12,16 +21,31 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from './ui/dr
 function PersonaSwitcher() {
   const app = useCompanion()
   const active = app.personas.find((item) => item.id === app.activePersonaId)
+  const quickOn = QUICK_PERSONAS.some((item) => item.id === app.activePersonaId)
   return (
     <div className="persona-bar">
+      <span className="persona-kicker">同一条消息</span>
+      <div className="persona-quick" role="radiogroup" aria-label="同一条消息的回复风格">
+        {QUICK_PERSONAS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={app.activePersonaId === item.id}
+            className={app.activePersonaId === item.id ? 'is-on' : undefined}
+            onClick={() => app.selectPersona(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
       <Menu>
         <MenuTrigger>
-          <button type="button" className="persona-switch" aria-label="切换人设">
-            <span>人设</span>
-            <strong>{active?.name || '客服助手'}</strong>
+          <button type="button" className="persona-more" aria-label="更多人设">
+            {quickOn ? '更多' : active?.name || '人设'}
           </button>
         </MenuTrigger>
-        <MenuContent align="start">
+        <MenuContent align="end">
           {app.personas.map((item) => (
             <MenuItem key={item.id} onSelect={() => app.selectPersona(item.id)}>
               {item.name || '未命名人设'}
@@ -29,7 +53,7 @@ function PersonaSwitcher() {
             </MenuItem>
           ))}
           <MenuSeparator />
-          <MenuItem onSelect={() => app.setSettingsOpen(true)}>管理人设</MenuItem>
+          <MenuItem onSelect={() => app.openSettings('persona')}>管理人设</MenuItem>
         </MenuContent>
       </Menu>
     </div>
@@ -38,14 +62,44 @@ function PersonaSwitcher() {
 
 export function CompanionPane({ hidden }: { hidden: boolean }) {
   const app = useCompanion()
+  const [dragging, setDragging] = useState(false)
   const chatLabel = formatChatType(app.focusSession.chatType)
   return (
     <section
-      className={hidden ? 'companion is-hidden' : 'companion'}
+      className={hidden ? 'companion is-hidden' : dragging ? 'companion is-dropping' : 'companion'}
       aria-label="智答助手"
       aria-busy={app.phase === 'loading'}
+      onDragEnter={(event) => {
+        if (![...event.dataTransfer.types].includes('Files')) return
+        event.preventDefault()
+        setDragging(true)
+      }}
+      onDragOver={(event) => {
+        if (![...event.dataTransfer.types].includes('Files')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        setDragging(true)
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+        setDragging(false)
+      }}
+      onDrop={(event) => {
+        event.preventDefault()
+        setDragging(false)
+        void app.acceptLibraryDrop(event.dataTransfer)
+      }}
     >
+      {dragging ? <div className="drop-veil">松开后加入知识库</div> : null}
       <DockStatusBar />
+      {!app.showDemo && !app.narrow ? (
+        <p className="demo-note">
+          演示窗已收起。贴住的是系统里的微信，不是演示数据。
+          <button type="button" onClick={app.toggleDemo}>
+            显示演示窗
+          </button>
+        </p>
+      ) : null}
       <header className="pane-header flex items-center gap-2 px-3">
         <div className="brand">
           <Sparkles size={18} />
@@ -65,7 +119,7 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
               </button>
             </MenuTrigger>
             <MenuContent>
-              <MenuItem onSelect={() => app.setSettingsOpen(true)}>
+              <MenuItem onSelect={() => app.openSettings('model')}>
                 <Settings size={15} /> 设置
               </MenuItem>
               <MenuItem onSelect={app.toggleTheme}>
@@ -75,17 +129,100 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
               {window.zhida ? (
                 <MenuItem onSelect={() => void window.zhida?.reattach()}>重新贴到微信</MenuItem>
               ) : null}
+              {window.zhida ? (
+                <MenuItem onSelect={app.toggleDemo}>{app.showDemo ? '收起演示窗' : '显示演示窗'}</MenuItem>
+              ) : null}
               <MenuSeparator />
               <DemoMenuItems />
             </MenuContent>
           </Menu>
         </div>
       </header>
-      <PersonaSwitcher />
+      {app.settingsOpen ? null : <PersonaSwitcher />}
+      {app.settingsOpen ? null : <IntentHint />}
       <div className="pane-scroll scroll">
+        {app.settingsOpen ? <SettingsPage /> : <CompanionBody />}
+      </div>
+      {app.settingsOpen ? null : <ActionBar />}
+    </section>
+  )
+}
+
+function CandidateList() {
+  const app = useCompanion()
+  const citation = citationForReply(app.replyMode, app.hits)
+  return (
+    <div className="candidates" role="radiogroup" aria-label="回复候选">
+      <p className="candidate-hint">
+        {app.provider === 'openai'
+          ? `三条回复由模型写成，上下文是当前会话最近 ${CHAT_CONTEXT_LIMIT} 条消息。点一条，或改完再插入。发送仍要再点一次。`
+          : '当前是本地草稿。模型不可用或已关闭时才会这样。点一条，或改完再插入。发送仍要再点一次。'}
+      </p>
+      {app.variants.map((text, index) => (
+        <button
+          key={`${index}-${text.slice(0, 24)}`}
+          type="button"
+          role="radio"
+          aria-checked={app.variantIndex === index}
+          className={app.variantIndex === index ? 'candidate is-on' : 'candidate'}
+          onClick={() => app.selectVariant(index)}
+        >
+          <span className="candidate-n">{index + 1}</span>
+          <span className="candidate-body">
+            <CiteBadge citation={citation} />
+            <span className="candidate-text">{text}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function IntentHint() {
+  const app = useCompanion()
+  if (app.focusSession.id === PENDING_SESSION_ID) return null
+  const hint = intentHint(app.intent)
+  return <p className={`intent-hint is-${hint.tone}`}>{hint.text}</p>
+}
+
+function SessionGlance() {
+  const app = useCompanion()
+  const [todosOnly, setTodosOnly] = useState(false)
+  const waiting = app.focusSession.id === PENDING_SESSION_ID
+  const glance = sessionGlance(app.focusSession.messages, app.focusSession.chatType)
+  const rows = (todosOnly ? app.focusSession.messages.filter((message) => isTodoLine(message.text)) : app.focusSession.messages).slice(-6)
+  return (
+    <div className="glance">
+      <div className="glance-head">
+        <span>{waiting ? '正在等微信当前会话' : glance.summary}</span>
+        {waiting ? null : (
+          <button type="button" className={todosOnly ? 'is-on' : undefined} onClick={() => setTodosOnly((value) => !value)}>
+            待办 {glance.todos.length}
+          </button>
+        )}
+      </div>
+      {waiting ? <p className="quiet">回复不会拿演示对话当上下文。</p> : null}
+      {rows.map((message) => (
+        <div key={message.id} className="glance-row">
+          <span>{message.role === 'agent' ? '我' : '对方'} · {message.text}</span>
+          <button type="button" onClick={() => app.saveMessage(message.text)}>
+            整理
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CompanionBody() {
+  const app = useCompanion()
+  return (
+    <>
+        <SessionGlance />
         <div className="section-title">
           <BookOpen size={16} />
           知识检索
+          {app.savedNoteCount > 0 ? <span className="meta">含拖入 {app.savedNoteCount} 篇</span> : null}
           {app.phase === 'ready' || app.phase === 'empty' ? (
             <span className="meta">{formatResultCount(app.hits.length)}</span>
           ) : null}
@@ -113,8 +250,8 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
           回复建议
           {app.phase === 'ready' && app.variantCount > 0 ? (
             <span className="meta">
-              {app.provider === 'openai' ? '模型 · ' : ''}
-              {app.replyMode === 'chat' ? '人设草稿 · ' : '依据摘录 · '}
+              {app.provider === 'openai' ? `模型 · 最近 ${CHAT_CONTEXT_LIMIT} 条会话 · ` : '本地草稿 · '}
+              {app.replyMode === 'chat' ? '人设 · ' : '知识摘录 · '}
               {app.variantIndex + 1} / {app.variantCount}
             </span>
           ) : null}
@@ -123,27 +260,18 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
         {app.phase === 'ready' ? (
           <div className="reply-wrap fade-in">
             {app.variants.length > 0 ? (
-              <div className="candidates" role="radiogroup" aria-label="回复候选">
-                <p className="candidate-hint">点一条候选，或在下面改完再插入。发送仍要再点一次。</p>
-                {app.variants.map((text, index) => (
-                  <button
-                    key={`${index}-${text.slice(0, 24)}`}
-                    type="button"
-                    role="radio"
-                    aria-checked={app.variantIndex === index}
-                    className={app.variantIndex === index ? 'candidate is-on' : 'candidate'}
-                    onClick={() => app.selectVariant(index)}
-                  >
-                    <span className="candidate-n">{index + 1}</span>
-                    <span className="candidate-text">{text}</span>
-                  </button>
-                ))}
-              </div>
+              <CandidateList />
             ) : null}
+            {app.provider === 'openai' ? null : (
+              <button type="button" className="linkish is-inline" onClick={() => app.openSettings('model')}>
+                配置大模型
+              </button>
+            )}
             <ReplyCard
               text={app.draft}
               editing={app.editing}
               dirty={app.dirty}
+              citation={citationForReply(app.replyMode, app.hits)}
               onChange={app.setDraft}
               onStartEdit={app.startEdit}
               onSave={app.saveEdit}
@@ -157,8 +285,6 @@ export function CompanionPane({ hidden }: { hidden: boolean }) {
             <p className="quiet">检索失败时不生成回复。</p>
           </div>
         ) : null}
-      </div>
-      <ActionBar />
-    </section>
+    </>
   )
 }

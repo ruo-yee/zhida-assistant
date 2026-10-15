@@ -3,6 +3,7 @@ import { buildChatVariants } from './chatReplies.ts'
 import { buildMockVariants } from './mockReplies.ts'
 import { completeOpenAI, type ModelConfig } from './openaiReply.ts'
 import { fillThree } from './parseReplies.ts'
+import type { ChatTurn } from './chatContext.ts'
 import type { PersonaVoice } from './personas.ts'
 
 export type ReplyGrounding = 'grounded' | 'chat'
@@ -13,6 +14,8 @@ export interface ReplyInput {
   personaText: string
   intent: IntentLabel
   customerText: string
+  /** Recent WeChat messages. This is 上下文 for the model, not the knowledge hits. */
+  turns?: ChatTurn[]
   grounding: ReplyGrounding
   hits: Array<Pick<KnowledgeHit, 'id' | 'title' | 'version' | 'excerpt' | 'score'>>
 }
@@ -31,11 +34,16 @@ export function groundingFor(intent: IntentLabel, hits: Array<{ score: number }>
 }
 
 /**
- * Reply port. Local drafts always exist.
- * An OpenAI-compatible endpoint, including a local Ollama server, is optional.
+ * Reply port. The configured OpenAI-compatible endpoint (local Ollama or the
+ * user's own URL) writes the three candidates from the current chat.
+ * Local drafts are only the fallback when that call is off or fails.
  */
 export interface ReplyGenerator {
   generate(input: ReplyInput): Promise<ReplyBatch>
+}
+
+export function usesModel(config: ModelConfig) {
+  return config.mode === 'openai' && config.baseUrl.trim().length > 0
 }
 
 function localVariants(input: ReplyInput) {
@@ -80,7 +88,7 @@ export function createReplyGenerator(options: {
     async generate(input) {
       const mocks = localVariants(input)
       const config = options.resolveConfig()
-      if (config.mode !== 'openai' || !config.baseUrl.trim()) {
+      if (!usesModel(config)) {
         return { variants: mocks, provider: 'mock', grounding: input.grounding }
       }
       try {

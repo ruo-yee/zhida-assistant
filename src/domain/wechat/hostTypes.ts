@@ -12,6 +12,9 @@ export interface HostBridgeStatus {
   axTrusted: boolean
   wechatRunning: boolean
   dbReady: boolean
+  needsAccessibility: boolean
+  /** Packaged app is 智答助手; `npm run dev` shows up as Electron. */
+  accessibilityName?: string
   detail: string
   session: WeChatSession | null
 }

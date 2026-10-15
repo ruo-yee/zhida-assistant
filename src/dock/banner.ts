@@ -1,0 +1,68 @@
+import { accessibilityGrantGuide, STALE_ACCESS_COPY, staleGrantHint } from '../domain/wechat/accessibilityCopy.ts'
+import type { HostBridgeStatus } from '../domain/wechat/hostTypes.ts'
+import type { DockStatus } from './types.ts'
+
+export interface DockBanner {
+  tone: 'ok' | 'wait' | 'warn' | 'idle'
+  title: string
+  hint: string
+  primary: 'accessibility' | 'screen' | null
+}
+
+/** One status line and at most one button. Screen Recording is not a second blocker. */
+export function dockBanner(status: DockStatus | null, bridge: HostBridgeStatus | null): DockBanner | null {
+  if (!status && !bridge) return null
+  const darwin = (status?.platform ?? bridge?.platform) === 'darwin'
+  const needScreen = darwin && Boolean(status?.needsScreenRecording)
+  const needAx = darwin && Boolean(status?.needsAccessibility || bridge?.needsAccessibility)
+  const stale = Boolean(status?.accessibilityStale) && needAx
+  const name = status?.accessibilityName || bridge?.accessibilityName || ''
+  const guide = accessibilityGrantGuide(name)
+  if (status?.mode === 'docked') {
+    const peer = bridge?.session?.peerName
+    const sessionHint = !needAx && peer && peer !== '当前微信' ? `会话「${peer}」` : ''
+    return {
+      tone: 'ok',
+      title: status.detail,
+      hint: needAx ? (stale ? STALE_ACCESS_COPY : guide.hint) : sessionHint,
+      primary: needAx ? 'accessibility' : null,
+    }
+  }
+  if (needAx) {
+    const extra = [stale ? staleGrantHint(name) : guide.hint, needScreen ? '屏幕录制可以稍后打开' : '']
+    return {
+      tone: 'warn',
+      title: stale ? STALE_ACCESS_COPY : guide.title,
+      hint: extra.filter(Boolean).join(' '),
+      primary: 'accessibility',
+    }
+  }
+  if (needScreen) {
+    return {
+      tone: 'warn',
+      title: '需要屏幕录制才能看到微信窗口',
+      hint: name ? `打开「${name}」` : '',
+      primary: 'screen',
+    }
+  }
+  if (status?.mode === 'searching') {
+    return { tone: 'wait', title: '正在查找微信…', hint: '', primary: null }
+  }
+  if (status) {
+    return { tone: 'warn', title: plainDockTitle(status), hint: '', primary: null }
+  }
+  if (bridge?.detail) return { tone: 'idle', title: shorten(bridge.detail), hint: '', primary: null }
+  return null
+}
+
+function plainDockTitle(status: DockStatus) {
+  if (status.detail.includes('没有运行') || status.detail.includes('未检测到微信')) return '微信没有运行'
+  if (status.detail.includes('没有可见') || status.detail.includes('窗口不可见')) return '微信在运行，窗口不可见'
+  if (status.detail.includes('失败')) return '暂时找不到微信窗口'
+  return shorten(status.detail)
+}
+
+function shorten(text: string) {
+  const line = text.split('。')[0]?.trim() || text.trim()
+  return line.length > 28 ? `${line.slice(0, 28)}…` : line
+}

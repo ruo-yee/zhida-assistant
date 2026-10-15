@@ -1,4 +1,5 @@
 import type { DockStatus } from './dock/types.ts'
+import type { FolderIndexResult } from './domain/knowledge/indexStatus.ts'
 import type { HostActionResult, HostBridgeStatus } from './domain/wechat/hostTypes.ts'
 
 declare global {
@@ -7,6 +8,15 @@ declare global {
       platform: string
       getDockStatus: () => Promise<DockStatus>
       reattach: () => Promise<DockStatus>
+      openAccessibilitySettings: () => Promise<boolean>
+      openScreenRecordingSettings: () => Promise<boolean>
+      readModelKey: () => Promise<string>
+      writeModelKey: (key: string) => Promise<void>
+      pickLibraryFolder: (kind: 'folder' | 'obsidian') => Promise<string>
+      indexLibrary: (folder: string, kind: 'folder' | 'obsidian') => Promise<FolderIndexResult>
+      watchLibrary: (folder: string, kind: 'folder' | 'obsidian', callback: () => void) => () => void
+      pathForDroppedFile: (file: unknown) => string
+      classifyLibrary: (folder: string) => Promise<'folder' | 'obsidian' | 'unknown'>
       onDockStatus: (callback: (status: DockStatus) => void) => () => void
       wechat?: {
         getStatus: () => Promise<HostBridgeStatus>

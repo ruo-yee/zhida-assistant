@@ -47,7 +47,7 @@ export function EmptyState() {
         <EmptyArt />
         <p>知识库里的文档都关掉了。</p>
         <p className="empty-breathe">下面仍按当前人设起草了回复</p>
-        <button type="button" className="linkish" onClick={() => app.setSettingsOpen(true)}>
+        <button type="button" className="linkish" onClick={() => app.openSettings('knowledge')}>
           去设置里打开一份文档
         </button>
       </div>
