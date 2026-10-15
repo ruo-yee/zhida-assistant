@@ -20,6 +20,11 @@ tell application "System Events"
           if visFlag is false or visFlag is 0 then set appVisible to false
           if (visFlag as text) is "false" or (visFlag as text) is "0" then set appVisible to false
         end try
+        try
+          set hiddenAttr to value of attribute "AXHidden"
+          if hiddenAttr is true or hiddenAttr is 1 then set appVisible to false
+          if (hiddenAttr as text) is "true" or (hiddenAttr as text) is "1" then set appVisible to false
+        end try
         if appVisible then
           repeat with w in windows
             try
@@ -91,6 +96,11 @@ tell application "System Events"
           set visFlag to visible
           if visFlag is false or visFlag is 0 then set appVisible to false
           if (visFlag as text) is "false" or (visFlag as text) is "0" then set appVisible to false
+        end try
+        try
+          set hiddenAttr to value of attribute "AXHidden"
+          if hiddenAttr is true or hiddenAttr is 1 then set appVisible to false
+          if (hiddenAttr as text) is "true" or (hiddenAttr as text) is "1" then set appVisible to false
         end try
         if appVisible then
           repeat with w in windows

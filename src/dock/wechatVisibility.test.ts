@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveWeChatVisibility } from './wechatVisibility.ts'
+import { applyHideMemory, resolveWeChatVisibility } from './wechatVisibility.ts'
 import type { FindOutcome } from './types.ts'
 
 const blind: FindOutcome = { bounds: null, reason: 'screen-recording', needsAccessibility: false }
@@ -45,6 +45,22 @@ describe('resolveWeChatVisibility', () => {
         fallback: { bounds: null, reason: 'not-running' },
       }).reason,
     ).toBe('hidden')
+  })
+
+  it('hides after Cmd+H once WeChat has been seen unhidden, even if a frame remains', () => {
+    const docked: FindOutcome = { bounds: frame, reason: 'ok' }
+    const first = applyHideMemory({ seenUnhidden: false }, false, docked)
+    expect(first.outcome).toEqual(docked)
+    expect(first.memory.seenUnhidden).toBe(true)
+    const hidden = applyHideMemory(first.memory, true, docked)
+    expect(hidden.outcome).toEqual({ bounds: null, reason: 'hidden' })
+  })
+
+  it('does not undock when isHidden is stuck true before a visible spell', () => {
+    const docked: FindOutcome = { bounds: frame, reason: 'ok' }
+    const stuck = applyHideMemory({ seenUnhidden: false }, true, docked)
+    expect(stuck.outcome).toEqual(docked)
+    expect(stuck.memory.seenUnhidden).toBe(false)
   })
 
   it('keeps an on-screen CoreGraphics window', () => {

@@ -43,3 +43,21 @@ export function pickComposer<T>(items: T[], shapeOf: (item: T) => ComposerShape)
 function area(shape: ComposerShape) {
   return shape.width * shape.height
 }
+
+/**
+ * Click the composer, not the send button.
+ * `frame` is top-left, the same space as the window server.
+ * The returned point is bottom-left, which is what a mouse event expects.
+ * 62% across and 16% up from the bottom matches the reference fill point.
+ */
+export function composerClickPoint(
+  frame: { x: number; y: number; width: number; height: number },
+  primaryHeight: number,
+): { x: number; y: number } | null {
+  if (frame.width < 240 || frame.height < 240 || !(primaryHeight > 0)) return null
+  const x = frame.x + frame.width * 0.62
+  const fromTop = frame.y + frame.height * 0.84
+  const y = primaryHeight - fromTop
+  if (!(x > 0) || !(y > 0)) return null
+  return { x, y }
+}

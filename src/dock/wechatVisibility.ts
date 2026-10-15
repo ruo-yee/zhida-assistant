@@ -1,6 +1,27 @@
 import type { FindOutcome, HostWindow } from './types.ts'
 import { dockOutcomeWithAx } from './axDock.ts'
 
+export interface HideMemory {
+  /** WeChat was on screen while the main app was not hidden. Cmd+H can then be trusted. */
+  seenUnhidden: boolean
+}
+
+/**
+ * A stuck isHidden flag must not undock a window we have never seen unhidden.
+ * After a real visible spell, Cmd+H hides the companion even if the window
+ * server still lists the frame.
+ */
+export function applyHideMemory(memory: HideMemory, appHidden: boolean, outcome: FindOutcome): {
+  memory: HideMemory
+  outcome: FindOutcome
+} {
+  const seenUnhidden = memory.seenUnhidden || Boolean(outcome.bounds && !appHidden)
+  if (appHidden && seenUnhidden) {
+    return { memory: { seenUnhidden }, outcome: { bounds: null, reason: 'hidden' } }
+  }
+  return { memory: { seenUnhidden }, outcome }
+}
+
 export interface WeChatPresenceReport {
   presence: 'visible' | 'hidden' | 'absent'
   bounds: HostWindow | null

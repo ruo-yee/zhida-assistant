@@ -336,7 +336,7 @@ function findHeader(window) {
     seen += 1
     var ident = axString(copyAttr(el, 'AXIdentifier')) || ''
     var role = axString(copyAttr(el, 'AXRole')) || ''
-    if (ident === 'big_title_line_h_view' && role === 'AXStaticText') {
+    if ((ident === 'big_title_line_h_view' || ident.slice(-22) === '.big_title_line_h_view') && (role === 'AXStaticText' || role === 'AXTextField')) {
       var raw = axString(copyAttr(el, 'AXValue')) || ''
       if (!cleanLine(raw)) raw = axString(copyAttr(el, 'AXTitle')) || ''
       return isRealTitle(raw)

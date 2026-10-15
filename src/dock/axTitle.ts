@@ -1,8 +1,14 @@
 import { stripCountSuffix } from '../domain/wechat/matchChat.ts'
 import { realChatTitle } from './sessionReport.ts'
 
-/** Header of the open conversation. Exact identifier, same as the reference reader. */
+/** Header of the open conversation. Same identifier as the reference reader. */
 export const HEADER_TITLE_IDENTIFIER = 'big_title_line_h_view'
+
+/** Exact id, or a path that ends at that node. The member-count label is a child, not this node. */
+export function isHeaderIdentifier(identifier: string) {
+  const text = identifier.trim()
+  return text === HEADER_TITLE_IDENTIFIER || text.endsWith(`.${HEADER_TITLE_IDENTIFIER}`)
+}
 
 const APP_NAMES = new Set(['微信', 'WeChat', 'Weixin'])
 const LIST_ROLES = new Set(['AXOutline', 'AXTable', 'AXList'])
@@ -96,7 +102,7 @@ export function headerTitleSearch(window: unknown, read: AxRead): { found: boole
     seen += 1
     const identifier = textOf(read(item.element, 'AXIdentifier')).trim()
     const role = textOf(read(item.element, 'AXRole')).trim()
-    if (identifier === HEADER_TITLE_IDENTIFIER && role === 'AXStaticText') {
+    if (isHeaderIdentifier(identifier) && (role === 'AXStaticText' || role === 'AXTextField')) {
       let raw = textOf(read(item.element, 'AXValue')).trim()
       if (!raw) raw = textOf(read(item.element, 'AXTitle')).trim()
       raw = raw.replace(/\s+/g, ' ').trim()

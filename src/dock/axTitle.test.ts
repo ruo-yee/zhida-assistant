@@ -28,6 +28,22 @@ function reader(): AxRead {
 }
 
 describe('chat title ladder', () => {
+  it('reads a header whose identifier is the full WeChat path', () => {
+    const header: Node = {
+      role: 'AXStaticText',
+      id: 'title_h_view.title_left_v_view.big_title_line_h_view',
+      value: 'bulaji',
+    }
+    const window: Node = { role: 'AXWindow', title: '微信', children: [header] }
+    expect(chatTitleFrom('微信', window, reader())).toBe('bulaji')
+    const count: Node = {
+      role: 'AXStaticText',
+      id: 'title_h_view.big_title_line_h_view.current_chat_count_label',
+      value: '322',
+    }
+    expect(chatTitleFrom('微信', { role: 'AXWindow', title: '微信', children: [count] }, reader())).toBe('')
+  })
+
   it('keeps the member count on the header so the session is a group', () => {
     const header: Node = {
       role: 'AXStaticText',

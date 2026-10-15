@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { pickComposer, type ComposerShape } from '../../src/dock/axComposer.ts'
+import { composerClickPoint, pickComposer, type ComposerShape } from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
@@ -40,6 +40,7 @@ interface Native {
   screenGranted(): boolean
   captureTitle(windowId: number, crop: Frame, file: string): boolean
   chatWindowId(): number
+  focusWrite(target: Frame | null, text: string, primaryHeight: number): AxComposer
 }
 
 /**
@@ -76,6 +77,26 @@ export function readAxComposer(target: Frame | null, hostTrusted: boolean): AxCo
   if (!api) return null
   try {
     return api.composer(target, null)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Click the composer and write the focused text area in this process.
+ * Used when AXWindows is empty. Does not press Return.
+ */
+export function writeFocusedComposer(
+  target: Frame | null,
+  text: string,
+  primaryHeight: number,
+  hostTrusted: boolean,
+): AxComposer | null {
+  if (!hostTrusted) return null
+  const api = lib()
+  if (!api) return null
+  try {
+    return api.focusWrite(target, text, primaryHeight)
   } catch {
     return null
   }
@@ -195,16 +216,25 @@ function bindNative(): Native {
         return null
       }
     }
+    const fromSymbol = (symbol: unknown) => {
+      if (!alive(symbol)) return null
+      try {
+        return accept(koffi.decode(symbol as bigint, 'void *'))
+      } catch {
+        return null
+      }
+    }
     try {
-      const decoded = accept(koffi.decode(cf.symbol('kCFBooleanTrue'), 'void *'))
+      const decoded = fromSymbol(cf.symbol('kCFBooleanTrue'))
       if (decoded) return decoded
     } catch {
       /* the symbol name can fail to resolve; dlsym is the same constant */
     }
     try {
       const dlsym = libc.func('void *dlsym(void *handle, const char *name)')
-      const symbol = dlsym(-2, 'kCFBooleanTrue')
-      const decoded = accept(alive(symbol) ? koffi.decode(symbol as bigint, 'void *') : null)
+      // RTLD_DEFAULT is (void *) -2. A JS number does not survive as that pointer.
+      const symbol = dlsym(BigInt('18446744073709551614'), 'kCFBooleanTrue')
+      const decoded = fromSymbol(symbol)
       if (decoded) return decoded
     } catch {
       /* RTLD_DEFAULT is unavailable */
@@ -456,6 +486,19 @@ function bindNative(): Native {
         CFRelease(raw)
       }
     }
+    // The focused control's window still exists when AXWindows is empty.
+    const focusedElement = copyAttr(root, 'AXFocusedUIElement')
+    if (alive(focusedElement)) {
+      const via = copyAttr(focusedElement, 'AXWindow')
+      if (alive(via) && !nodes.includes(via)) nodes.push(keep(via))
+      if (alive(focusedElement) && focusedElement !== via) {
+        try {
+          CFRelease(focusedElement)
+        } catch {
+          /* the window keeps its own reference */
+        }
+      }
+    }
     // WeChat 4 can leave AXWindows empty and AXMainWindow at -25212 while a
     // window still sits under AXChildren. Menu bars are not windows.
     if (nodes.length === 0) collectChildWindows(root, nodes, 0)
@@ -532,6 +575,117 @@ function bindNative(): Native {
     }
   }
 
+  let postClick: (point: { x: number; y: number }) => boolean = () => false
+  try {
+    koffi.struct('ZhidaPoint', { x: 'double', y: 'double' })
+    const createMouse = cg.func('void *CGEventCreateMouseEvent(void *source, uint32 type, ZhidaPoint point, uint32 button)')
+    const postEvent = cg.func('void CGEventPost(uint32 tap, void *event)')
+    postClick = (point) => {
+      let down: unknown = null
+      let up: unknown = null
+      try {
+        down = createMouse(null, 1, point, 0)
+        up = createMouse(null, 2, point, 0)
+        if (!alive(down) || !alive(up)) return false
+        postEvent(0, down)
+        postEvent(0, up)
+        return true
+      } catch {
+        return false
+      } finally {
+        if (alive(down)) CFRelease(down)
+        if (alive(up)) CFRelease(up)
+      }
+    }
+  } catch {
+    postClick = () => false
+  }
+  const AXSystem = ax.func('void *AXUIElementCreateSystemWide()')
+  const AXPid = ax.func('int AXUIElementGetPid(void *element, _Out_ int *pid)')
+
+  function activateWeChat(procs: Array<{ pid: number; path: string }>) {
+    const wanted = new Set(procs.map((item) => item.pid))
+    if (wanted.size === 0) return
+    try {
+      const objc = koffi.load('/usr/lib/libobjc.A.dylib')
+      const getClass = objc.func('void *objc_getClass(const char *name)')
+      const sel = objc.func('void *sel_registerName(const char *name)')
+      const msg = objc.func('void *objc_msgSend(void *self, void *sel)')
+      const msgCount = objc.func('uint64 objc_msgSend(void *self, void *sel)')
+      const msgAt = objc.func('void *objc_msgSend(void *self, void *sel, uint64 index)')
+      const msgInt = objc.func('int objc_msgSend(void *self, void *sel)')
+      const msgActivate = objc.func('void objc_msgSend(void *self, void *sel, uint64 flags)')
+      const apps = msg(msg(getClass('NSWorkspace'), sel('sharedWorkspace')), sel('runningApplications'))
+      if (!alive(apps)) return
+      const count = Math.min(Number(msgCount(apps, sel('count'))) || 0, 400)
+      for (let index = 0; index < count; index += 1) {
+        const app = msgAt(apps, sel('objectAtIndex:'), index)
+        if (!alive(app) || !wanted.has(Number(msgInt(app, sel('processIdentifier'))))) continue
+        try {
+          msgActivate(app, sel('activateWithOptions:'), 2)
+        } catch {
+          try {
+            msg(app, sel('activate'))
+          } catch {
+            /* the click still lands if WeChat is already frontmost */
+          }
+        }
+      }
+    } catch {
+      /* activation is optional; the click is what focuses the composer */
+    }
+  }
+
+  const warmed = new Set<number>()
+  let pumpRunLoop: ((seconds: number) => void) | null = null
+  try {
+    const runMode = cf.func('int32 CFRunLoopRunInMode(void *mode, double seconds, uint8 returnAfterSourceHandled)')
+    const mode = koffi.decode(cf.symbol('kCFRunLoopDefaultMode'), 'void *')
+    if (alive(mode)) {
+      pumpRunLoop = (seconds) => {
+        try {
+          runMode(mode, seconds, 0)
+        } catch {
+          /* a missed pump still leaves the next poll to read the tree */
+        }
+      }
+    }
+  } catch {
+    pumpRunLoop = null
+  }
+
+  // WeChat builds the accessibility tree after AXManualAccessibility, on its
+  // own run loop. Reading in the same turn only sees the menu bar.
+  function expose(root: unknown, pid: number) {
+    AXTimeout(root, 0.5)
+    let err = 0
+    try {
+      if (alive(boolTrue)) err = Number(AXSet(root, key('AXManualAccessibility'), boolTrue))
+    } catch {
+      err = -1
+    }
+    if (err === -25205 && alive(boolTrue)) {
+      try {
+        AXSet(root, key('AXEnhancedUserInterface'), boolTrue)
+      } catch {
+        /* the legacy flag is optional */
+      }
+    }
+    if (warmed.has(pid)) return
+    if (axWindows(root).length > 0) {
+      warmed.add(pid)
+      return
+    }
+    const pump = pumpRunLoop
+    if (pump) {
+      for (let step = 0; step < 8; step += 1) {
+        pump(0.06)
+        if (axWindows(root).length > 0) break
+      }
+    }
+    warmed.add(pid)
+  }
+
   return {
     snapshot(selfPid: number): WeChatWindowSnapshot {
       const procs = wechatPids()
@@ -570,14 +724,7 @@ function bindNative(): Native {
           const root = AXCreate(proc.pid)
           if (!alive(root)) continue
           keep(root)
-          AXTimeout(root, 0.5)
-          // WeChat 4 builds the tree only after this. Set it on every read so a
-          // first miss does not leave the header and composer invisible.
-          try {
-            if (alive(boolTrue)) AXSet(root, key('AXManualAccessibility'), boolTrue)
-          } catch {
-            /* a miss is not fatal; the tree may already be exposed */
-          }
+          expose(root, proc.pid)
           if (rankPath(proc.path) === 0) {
             const focusedTitle = focusedChatTitle(root)
             if (focusedTitle) return { state: 'visible', title: focusedTitle }
@@ -613,12 +760,7 @@ function bindNative(): Native {
           const root = AXCreate(proc.pid)
           if (!alive(root)) continue
           keep(root)
-          AXTimeout(root, 0.5)
-          try {
-            if (alive(boolTrue)) AXSet(root, key('AXManualAccessibility'), boolTrue)
-          } catch {
-            /* the tree may already be exposed */
-          }
+          expose(root, proc.pid)
           const nodes = axWindows(root)
           if (nodes.length === 0) continue
           const chosen = pickChatElement(nodes, target, elementFrame, minimized)
@@ -666,6 +808,53 @@ function bindNative(): Native {
         return chosen && chosen.width >= 240 && chosen.height >= 240 ? chosen.id : 0
       } catch {
         return 0
+      }
+    },
+    focusWrite(target: Frame | null, text: string, primaryHeight: number): AxComposer {
+      const empty: AxComposer = { found: false, value: null, title: '' }
+      const point = target ? composerClickPoint(target, primaryHeight) : null
+      if (!point || !text.trim()) return empty
+      const procs = chatProcesses()
+      const pids = new Set(procs.map((item) => item.pid))
+      try {
+        for (const proc of procs) {
+          const root = AXCreate(proc.pid)
+          if (!alive(root)) continue
+          keep(root)
+          expose(root, proc.pid)
+        }
+        activateWeChat(procs)
+        if (!postClick(point)) return empty
+        const pump = pumpRunLoop
+        if (pump) pump(0.2)
+        const system = AXSystem()
+        if (!alive(system)) return empty
+        keep(system)
+        const focused = copyAttr(system, 'AXFocusedUIElement')
+        if (!alive(focused)) return empty
+        keep(focused)
+        const pidSlot = [0]
+        try {
+          AXPid(focused, pidSlot)
+        } catch {
+          return empty
+        }
+        if (!pids.has(Number(pidSlot[0]))) return empty
+        const role = typeof read(focused, 'AXRole') === 'string' ? String(read(focused, 'AXRole')) : ''
+        const identifier = typeof read(focused, 'AXIdentifier') === 'string' ? String(read(focused, 'AXIdentifier')) : ''
+        const title = typeof read(focused, 'AXTitle') === 'string' ? String(read(focused, 'AXTitle')) : ''
+        const frame = elementFrame(focused)
+        const box = pickComposer(
+          [{ element: focused, shape: { role, identifier, title, width: frame?.width ?? 0, height: frame?.height ?? 0 } }],
+          (item) => item.shape,
+        )
+        if (!box) return empty
+        const current = read(box.element, 'AXValue')
+        if (typeof current === 'string' && current.trim()) return { found: true, value: current, title: '' }
+        const after = assignText(box.element, text)
+        return { found: true, value: after, title: '' }
+      } finally {
+        releaseOwned()
       }
     },
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickComposer, type ComposerShape } from './axComposer.ts'
+import { composerClickPoint, pickComposer, type ComposerShape } from './axComposer.ts'
 
 function shape(partial: Partial<ComposerShape> & Pick<ComposerShape, 'role'>): ComposerShape {
   return {
@@ -31,5 +31,11 @@ describe('pickComposer', () => {
     const only = { id: 'box', ...shape({ role: 'AXTextArea' }) }
     expect(pickComposer([only], (item) => item)?.id).toBe('box')
     expect(pickComposer([{ id: 'search', ...shape({ role: 'AXTextField', title: '搜索', width: 200, height: 24 }) }], (item) => item)).toBeNull()
+  })
+
+  it('clicks the composer band and not the send button', () => {
+    const point = composerClickPoint({ x: 100, y: 80, width: 900, height: 700 }, 900)
+    expect(point).toEqual({ x: 100 + 900 * 0.62, y: 900 - (80 + 700 * 0.84) })
+    expect(composerClickPoint({ x: 0, y: 0, width: 100, height: 100 }, 900)).toBeNull()
   })
 })
