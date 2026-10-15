@@ -350,18 +350,31 @@ function run(argv) {
         var size = [0, 0]
         try { size = win.size() } catch (error) { size = [0, 0] }
         if (!size || size[0] < 240 || size[1] < 240) continue
+        var winPos = [0, 0]
+        try { winPos = win.position() } catch (error) { winPos = [0, 0] }
         var areas = []
         try { areas = win.textAreas() } catch (error) { areas = [] }
+        var seenAreas = 0
+        var only = null
         for (var j = 0; j < areas.length; j++) {
           var box = areas[j]
           var boxSize = [0, 0]
+          var boxPos = [0, 0]
           try { boxSize = box.size() } catch (error) { boxSize = [0, 0] }
+          try { boxPos = box.position() } catch (error) { boxPos = [0, 0] }
           var area = Number(boxSize[0]) * Number(boxSize[1])
-          if (boxSize[0] >= 80 && boxSize[1] >= 16 && area > bestArea) {
+          if (!(boxSize[0] >= 80 && boxSize[1] >= 16 && boxSize[1] <= 280)) continue
+          seenAreas += 1
+          only = box
+          var bottomGap = (winPos[1] + size[1]) - (boxPos[1] + boxSize[1])
+          var center = boxPos[1] + boxSize[1] / 2
+          var inBand = boxSize[0] >= size[0] * 0.32 && center >= winPos[1] + size[1] * 0.75 && bottomGap <= size[1] * 0.16 && bottomGap >= -8
+          if (inBand && area > bestArea) {
             bestArea = area
             best = box
           }
         }
+        if (!best && seenAreas === 1) best = only
       }
     } catch (error) {}
   }

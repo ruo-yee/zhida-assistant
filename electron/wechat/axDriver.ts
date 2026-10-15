@@ -167,6 +167,10 @@ function axSize(el) {
   return { w: Number(size.width || size.x || 0), h: Number(size.height || size.y || 0) }
 }
 
+function composerIdent(ident) {
+  return ident === 'chat_input_field' || ident.slice(-17) === '.chat_input_field'
+}
+
 function findInput(window) {
   var named = null
   var best = null
@@ -179,7 +183,7 @@ function findInput(window) {
     seen += 1
     var role = axString(copyAttr(el, 'AXRole'))
     var ident = axString(copyAttr(el, 'AXIdentifier')) || ''
-    if (ident === 'chat_input_field') named = el
+    if (composerIdent(ident) && (role === 'AXTextArea' || role === 'AXTextField')) named = el
     if (role === 'AXTextArea') {
       any = el
       var size = axSize(el)
@@ -189,7 +193,9 @@ function findInput(window) {
         bestArea = area
       }
     }
+    if (role === 'AXOutline' || role === 'AXTable' || role === 'AXList' || role === 'AXImage' || role === 'AXWebArea' || role === 'AXButton') continue
     var kids = childrenOf(el)
+    if (role === 'AXScrollArea' && kids.length > 12 && !composerIdent(ident)) continue
     for (var i = 0; i < kids.length; i++) queue.push(kids[i])
   }
   if (named) return named

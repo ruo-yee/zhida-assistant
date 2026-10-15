@@ -1,5 +1,11 @@
 import { createRequire } from 'node:module'
-import { composerClickPoint, pickComposer, type ComposerShape } from '../../src/dock/axComposer.ts'
+import {
+  COMPOSER_IDENTIFIER,
+  isComposerIdentifier,
+  pickComposer,
+  shouldExpandForComposer,
+  type ComposerShape,
+} from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
@@ -40,7 +46,6 @@ interface Native {
   screenGranted(): boolean
   captureTitle(windowId: number, crop: Frame, file: string): boolean
   chatWindowId(): number
-  focusWrite(target: Frame | null, text: string, primaryHeight: number): AxComposer
 }
 
 /**
@@ -77,26 +82,6 @@ export function readAxComposer(target: Frame | null, hostTrusted: boolean): AxCo
   if (!api) return null
   try {
     return api.composer(target, null)
-  } catch {
-    return null
-  }
-}
-
-/**
- * Click the composer and write the focused text area in this process.
- * Used when AXWindows is empty. Does not press Return.
- */
-export function writeFocusedComposer(
-  target: Frame | null,
-  text: string,
-  primaryHeight: number,
-  hostTrusted: boolean,
-): AxComposer | null {
-  if (!hostTrusted) return null
-  const api = lib()
-  if (!api) return null
-  try {
-    return api.focusWrite(target, text, primaryHeight)
   } catch {
     return null
   }
@@ -575,34 +560,6 @@ function bindNative(): Native {
     }
   }
 
-  let postClick: (point: { x: number; y: number }) => boolean = () => false
-  try {
-    koffi.struct('ZhidaPoint', { x: 'double', y: 'double' })
-    const createMouse = cg.func('void *CGEventCreateMouseEvent(void *source, uint32 type, ZhidaPoint point, uint32 button)')
-    const postEvent = cg.func('void CGEventPost(uint32 tap, void *event)')
-    postClick = (point) => {
-      let down: unknown = null
-      let up: unknown = null
-      try {
-        down = createMouse(null, 1, point, 0)
-        up = createMouse(null, 2, point, 0)
-        if (!alive(down) || !alive(up)) return false
-        postEvent(0, down)
-        postEvent(0, up)
-        return true
-      } catch {
-        return false
-      } finally {
-        if (alive(down)) CFRelease(down)
-        if (alive(up)) CFRelease(up)
-      }
-    }
-  } catch {
-    postClick = () => false
-  }
-  const AXSystem = ax.func('void *AXUIElementCreateSystemWide()')
-  const AXPid = ax.func('int AXUIElementGetPid(void *element, _Out_ int *pid)')
-
   function activateWeChat(procs: Array<{ pid: number; path: string }>) {
     const wanted = new Set(procs.map((item) => item.pid))
     if (wanted.size === 0) return
@@ -627,12 +584,12 @@ function bindNative(): Native {
           try {
             msg(app, sel('activate'))
           } catch {
-            /* the click still lands if WeChat is already frontmost */
+            /* AXFocused on the text area still applies when WeChat is already front */
           }
         }
       }
     } catch {
-      /* activation is optional; the click is what focuses the composer */
+      /* bringing WeChat forward is optional; the write does not click */
     }
   }
 
@@ -756,6 +713,11 @@ function bindNative(): Native {
       const main = procs.find((item) => rankPath(item.path) === 0)
       if (!target && main && appHidden(main.pid)) return empty
       try {
+        if (text !== null && target) {
+          activateWeChat(procs)
+          const pump = pumpRunLoop
+          if (pump) pump(0.08)
+        }
         for (const proc of procs) {
           const root = AXCreate(proc.pid)
           if (!alive(root)) continue
@@ -772,6 +734,10 @@ function bindNative(): Native {
           if (text === null) {
             const value = read(box, 'AXValue')
             return { found: true, value: typeof value === 'string' ? value : '', title }
+          }
+          const current = read(box, 'AXValue')
+          if (typeof current === 'string' && current.trim() && current.trim() !== text.trim()) {
+            return { found: true, value: current, title: chatTitleFrom(windowTitle, chosen, read) || title }
           }
           const after = assignText(box, text)
           return { found: true, value: after, title: chatTitleFrom(windowTitle, chosen, read) || title }
@@ -810,79 +776,45 @@ function bindNative(): Native {
         return 0
       }
     },
-    focusWrite(target: Frame | null, text: string, primaryHeight: number): AxComposer {
-      const empty: AxComposer = { found: false, value: null, title: '' }
-      const point = target ? composerClickPoint(target, primaryHeight) : null
-      if (!point || !text.trim()) return empty
-      const procs = chatProcesses()
-      const pids = new Set(procs.map((item) => item.pid))
-      try {
-        for (const proc of procs) {
-          const root = AXCreate(proc.pid)
-          if (!alive(root)) continue
-          keep(root)
-          expose(root, proc.pid)
-        }
-        activateWeChat(procs)
-        if (!postClick(point)) return empty
-        const pump = pumpRunLoop
-        if (pump) pump(0.2)
-        const system = AXSystem()
-        if (!alive(system)) return empty
-        keep(system)
-        const focused = copyAttr(system, 'AXFocusedUIElement')
-        if (!alive(focused)) return empty
-        keep(focused)
-        const pidSlot = [0]
-        try {
-          AXPid(focused, pidSlot)
-        } catch {
-          return empty
-        }
-        if (!pids.has(Number(pidSlot[0]))) return empty
-        const role = typeof read(focused, 'AXRole') === 'string' ? String(read(focused, 'AXRole')) : ''
-        const identifier = typeof read(focused, 'AXIdentifier') === 'string' ? String(read(focused, 'AXIdentifier')) : ''
-        const title = typeof read(focused, 'AXTitle') === 'string' ? String(read(focused, 'AXTitle')) : ''
-        const frame = elementFrame(focused)
-        const box = pickComposer(
-          [{ element: focused, shape: { role, identifier, title, width: frame?.width ?? 0, height: frame?.height ?? 0 } }],
-          (item) => item.shape,
-        )
-        if (!box) return empty
-        const current = read(box.element, 'AXValue')
-        if (typeof current === 'string' && current.trim()) return { found: true, value: current, title: '' }
-        const after = assignText(box.element, text)
-        return { found: true, value: after, title: '' }
-      } finally {
-        releaseOwned()
-      }
-    },
   }
 
   function findComposer(window: unknown) {
-    const queue = [window]
+    const windowFrame = elementFrame(window)
     const found: Array<{ element: unknown; shape: ComposerShape }> = []
+    const queue: Array<{ element: unknown; mark: string }> = [{ element: window, mark: '' }]
     let seen = 0
-    while (queue.length > 0 && seen < 2000) {
-      const element = queue.shift()
+    while (queue.length > 0 && seen < 2500) {
+      const item = queue.shift()
+      if (!item) break
+      const element = item.element
       if (!alive(element) && element !== window) continue
       seen += 1
       const role = typeof read(element, 'AXRole') === 'string' ? String(read(element, 'AXRole')) : ''
-      const identifier = typeof read(element, 'AXIdentifier') === 'string' ? String(read(element, 'AXIdentifier')) : ''
+      const ownId = typeof read(element, 'AXIdentifier') === 'string' ? String(read(element, 'AXIdentifier')) : ''
+      const identifier = isComposerIdentifier(ownId) ? ownId : item.mark || ownId
+      const title = typeof read(element, 'AXTitle') === 'string' ? String(read(element, 'AXTitle')) : ''
       if (role === 'AXTextArea' || role === 'AXTextField') {
         const frame = elementFrame(element)
-        const title = typeof read(element, 'AXTitle') === 'string' ? String(read(element, 'AXTitle')) : ''
         found.push({
           element,
-          shape: { role, identifier, title, width: frame?.width ?? 0, height: frame?.height ?? 0 },
+          shape: {
+            role,
+            identifier,
+            title,
+            width: frame?.width ?? 0,
+            height: frame?.height ?? 0,
+            x: frame?.x,
+            y: frame?.y,
+          },
         })
       }
       const children = read(element, 'AXChildren')
-      if (Array.isArray(children)) {
-        for (const child of children) queue.push(child)
-      }
+      const list = Array.isArray(children) ? children : []
+      if (!shouldExpandForComposer(role, ownId, list.length)) continue
+      const mark = isComposerIdentifier(ownId) || item.mark === COMPOSER_IDENTIFIER ? COMPOSER_IDENTIFIER : ''
+      for (const child of list) queue.push({ element: child, mark })
     }
-    return pickComposer(found, (item) => item.shape)?.element ?? null
+    return pickComposer(found, (entry) => entry.shape, windowFrame)?.element ?? null
   }
 
   function assignText(element: unknown, text: string) {
@@ -893,7 +825,7 @@ function bindNative(): Native {
         try {
           AXSet(element, key('AXFocused'), boolTrue)
         } catch {
-          /* focusing the composer is optional */
+          /* attribute focus only — never a mouse click */
         }
       }
       AXSet(element, key('AXValue'), created)

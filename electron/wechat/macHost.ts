@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { app, screen } from 'electron'
+import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
 import { accessibilityDetail } from '../../src/domain/wechat/accessibilityCopy.ts'
 import type { WeChatMessage } from '../../src/domain/wechat/WeChatBridge.ts'
@@ -24,7 +24,7 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
-import { readAxComposer, writeAxComposer, writeFocusedComposer } from './macNative.ts'
+import { readAxComposer, writeAxComposer } from './macNative.ts'
 import { readSystemComposer, writeSystemComposer } from './systemComposer.ts'
 import { mergeComposerView, readDesktopSession } from './visibleSession.ts'
 import {
@@ -126,13 +126,17 @@ export class MacWeChatHost {
     const plan = planInsert(toComposer(view), text)
     if (plan.action === 'refuse' && !view.hasTextArea && view.trusted && view.running && view.hasWindow) {
       const typed = cleanText(text)
-      const focused = typed
-        ? writeFocusedComposer(chatFrame(), typed, screen.getPrimaryDisplay().bounds.height, view.trusted)
-        : null
-      if (focused?.found) {
-        if (focused.value?.trim() && focused.value.trim() !== typed) return handled(false, '输入框已有草稿，未覆盖')
-        const confirmed = confirmInserted(focused.value, typed, true)
-        if (confirmed.action !== 'refuse') return handled(true, '已插入')
+      if (typed) {
+        const native = writeAxComposer(chatFrame(), typed, view.trusted)
+        if (native?.found) {
+          if (native.value?.trim() && native.value.trim() !== typed) return handled(false, '输入框已有草稿，未覆盖')
+          const confirmed = confirmInserted(native.value, typed, true)
+          if (confirmed.action !== 'refuse') return handled(true, '已插入')
+          return handled(false, confirmed.reason)
+        }
+        const system = await writeSystemComposer(typed)
+        const systemConfirmed = confirmInserted(system, typed, true)
+        if (systemConfirmed.action !== 'refuse') return handled(true, '已插入')
       }
     }
     if (plan.action === 'refuse') return handled(false, refuseReason(plan.reason))
