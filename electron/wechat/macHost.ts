@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { homedir } from 'node:os'
-import { app, clipboard, screen } from 'electron'
+import { app } from 'electron'
 import type { HostActionResult, HostBridgeStatus } from '../../src/domain/wechat/hostTypes.ts'
 import { accessibilityDetail } from '../../src/domain/wechat/accessibilityCopy.ts'
 import type { WeChatMessage } from '../../src/domain/wechat/WeChatBridge.ts'
@@ -8,7 +8,6 @@ import {
   NEED_AX,
   SendGuard,
   cleanText,
-  confirmInserted,
   planSend,
   type ComposerView,
 } from '../../src/domain/wechat/composerPolicy.ts'
@@ -23,8 +22,8 @@ import {
   type IndexedChat,
 } from '../../src/domain/wechat/messageSql.ts'
 import { runAx, type AxView } from './axDriver.ts'
-import { pasteComposer, readAxComposer, writeAxComposer } from './macNative.ts'
-import { readSystemComposer, writeSystemComposer } from './systemComposer.ts'
+import { insertWeChatText, readAxComposer } from './macNative.ts'
+import { readSystemComposer } from './systemComposer.ts'
 import { mergeComposerView, readDesktopSession } from './visibleSession.ts'
 import {
   accountIdFromRoot,
@@ -127,71 +126,16 @@ export class MacWeChatHost {
     if (!view.trusted) return handled(false, refuseReason(NEED_AX))
     if (!view.running) return handled(false, '微信没有运行')
     if (!view.hasWindow) return handled(false, '没找到微信主窗口（微信可能已最小化或隐藏）')
-    if (view.composer?.trim() && view.composer.trim() !== typed) return handled(false, '输入框已有草稿，未覆盖')
     const claimed = this.guard.claim('insert', view.windowId, typed, Date.now())
     if (!claimed.ok) return handled(false, claimed.reason)
     let sent = false
     try {
-      const frame = chatFrame()
-      const native = writeAxComposer(frame, typed, view.trusted)
-      if (native?.found) {
-        if (native.value?.trim() && native.value.trim() !== typed) return handled(false, '输入框已有草稿，未覆盖')
-        const confirmed = confirmInserted(native.value, typed, sameTitle(view.title, native.title || view.title))
-        if (confirmed.action === 'refuse') {
-          if (confirmed.reason.includes('会话已变化')) writeAxComposer(frame, '', view.trusted)
-          if (native.value?.trim()) return handled(false, confirmed.reason)
-        } else {
-          sent = true
-          return handled(true, '已插入')
-        }
-      }
-      const written = await runAx('set', typed)
-      if (written.hasTextArea && written.composer !== null) {
-        const confirmed = confirmInserted(written.composer, typed, sameTitle(view.title, written.title))
-        if (confirmed.action === 'refuse') {
-          if (confirmed.reason.includes('会话已变化')) await runAx('clear')
-          if (written.composer.trim()) return handled(false, confirmed.reason)
-        } else {
-          sent = true
-          return handled(true, '已插入')
-        }
-      }
-      const system = await writeSystemComposer(typed)
-      const systemConfirmed = confirmInserted(system, typed, true)
-      if (systemConfirmed.action !== 'refuse') {
-        sent = true
-        return handled(true, '已插入')
-      }
-      const pasted = await this.pasteIntoComposer(view, frame, typed)
-      if (pasted.ok) sent = true
-      return pasted
+      const attempt = insertWeChatText(chatFrame(), typed, view.title, view.trusted)
+      if (!attempt) return handled(false, '写入微信输入框失败')
+      sent = attempt.ok
+      return handled(attempt.ok, attempt.reason)
     } finally {
       this.guard.finish('insert', view.windowId, typed, sent, Date.now())
-    }
-  }
-
-  /**
-   * `wechat_send` paste fallback. WeChat 4 often has no AXTextArea until the
-   * paste lands. The click is the composer band only. Clipboard is restored.
-   * Return is not pressed.
-   */
-  private async pasteIntoComposer(view: AxView, frame: { x: number; y: number; width: number; height: number } | null, typed: string): Promise<HostActionResult> {
-    if (!frame) return handled(false, '没找到微信主窗口（微信可能已最小化或隐藏）')
-    const saved = await clipboard.readText()
-    await clipboard.writeText(typed)
-    try {
-      const attempt = pasteComposer(frame, screen.getPrimaryDisplay().bounds.height, view.trusted)
-      if (!attempt?.pasted || !attempt.sameWindow) {
-        if (attempt && !attempt.sameWindow) return handled(false, '点击后微信窗口变了，没有粘贴')
-        return handled(false, '微信没有提供可写入的输入框，请用复制')
-      }
-      const again = readAxComposer(frame, view.trusted)
-      if (again?.title && !sameTitle(view.title, again.title)) return handled(false, '当前微信会话已变化，未发送')
-      if (again?.found && again.value?.trim() && again.value.trim() !== typed) return handled(false, '写入后校验失败')
-      if (again?.found && again.value?.trim() !== typed) return handled(false, '微信没有提供可写入的输入框，请用复制')
-      return handled(true, '已插入')
-    } finally {
-      await clipboard.writeText(saved)
     }
   }
 

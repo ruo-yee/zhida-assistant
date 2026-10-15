@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { composerPoint, mouseEventPoint, pickLargestTextArea, type TextAreaShape } from '../../src/dock/axComposer.ts'
+import { MAX_INPUT_NODES, composerPoint, pickLargestTextArea, type TextAreaShape } from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
@@ -40,13 +40,12 @@ interface Native {
   screenGranted(): boolean
   captureTitle(windowId: number, crop: Frame, file: string): boolean
   chatWindowId(): number
-  pasteComposer(target: Frame | null, primaryHeight: number): PasteAttempt
+  insertText(target: Frame | null, text: string, title: string): InsertAttempt
 }
 
-export interface PasteAttempt {
-  clicked: boolean
-  pasted: boolean
-  sameWindow: boolean
+export interface InsertAttempt {
+  ok: boolean
+  reason: string
 }
 
 /**
@@ -89,16 +88,15 @@ export function readAxComposer(target: Frame | null, hostTrusted: boolean): AxCo
 }
 
 /**
- * Paste fallback from `wechat_send.insert_text`.
- * Clicks the composer band, then Cmd+V. Does not press Return.
- * Null means the event calls could not be made.
+ * `wechat_send.insert_text`. Writes the largest text area, or pastes into
+ * the composer point when WeChat 4 has none. Never presses Return.
  */
-export function pasteComposer(target: Frame | null, primaryHeight: number, hostTrusted: boolean): PasteAttempt | null {
+export function insertWeChatText(target: Frame | null, text: string, title: string, hostTrusted: boolean): InsertAttempt | null {
   if (!hostTrusted) return null
   const api = lib()
   if (!api) return null
   try {
-    return api.pasteComposer(target, primaryHeight)
+    return api.insertText(target, text, title)
   } catch {
     return null
   }
@@ -639,23 +637,22 @@ function bindNative(): Native {
     const createKey = cg.func('void *CGEventCreateKeyboardEvent(void *source, uint16 key, uint8 down)')
     const setFlags = cg.func('void CGEventSetFlags(void *event, uint64 flags)')
     const postEvent = cg.func('void CGEventPost(uint32 tap, void *event)')
+    const setField = cg.func('void CGEventSetIntegerValueField(void *event, uint32 field, int64 value)')
     postClick = (point) => {
-      let moved: unknown = null
       let down: unknown = null
       let up: unknown = null
       try {
-        moved = createMouse(null, 5, point, 0)
         down = createMouse(null, 1, point, 0)
         up = createMouse(null, 2, point, 0)
         if (!alive(down) || !alive(up)) return false
-        if (alive(moved)) postEvent(0, moved)
+        setField(down, 1, 1)
+        setField(up, 1, 1)
         postEvent(0, down)
         postEvent(0, up)
         return true
       } catch {
         return false
       } finally {
-        if (alive(moved)) CFRelease(moved)
         if (alive(down)) CFRelease(down)
         if (alive(up)) CFRelease(up)
       }
@@ -668,8 +665,9 @@ function bindNative(): Native {
         up = createKey(null, KEY_V, 0)
         if (!alive(down) || !alive(up)) return false
         setFlags(down, COMMAND_FLAG)
-        setFlags(up, COMMAND_FLAG)
         postEvent(0, down)
+        pumpRunLoop?.(0.01)
+        setFlags(up, COMMAND_FLAG)
         postEvent(0, up)
         return true
       } catch {
@@ -682,6 +680,21 @@ function bindNative(): Native {
   } catch {
     postClick = () => false
     postPaste = () => false
+  }
+
+  let pauseUnpumped: (seconds: number) => void = () => {}
+  try {
+    const usleep = libc.func('int usleep(uint32 usec)')
+    pauseUnpumped = (seconds) => {
+      usleep(Math.max(0, Math.min(2_000_000, Math.round(seconds * 1_000_000))))
+    }
+  } catch {
+    pauseUnpumped = () => {}
+  }
+
+  function pause(seconds: number) {
+    if (pumpRunLoop) pumpRunLoop(seconds)
+    else pauseUnpumped(seconds)
   }
 
   // WeChat builds the accessibility tree after AXManualAccessibility, on its
@@ -849,81 +862,318 @@ function bindNative(): Native {
         return 0
       }
     },
-    pasteComposer(target: Frame | null, primaryHeight: number): PasteAttempt {
-      const stopped: PasteAttempt = { clicked: false, pasted: false, sameWindow: true }
-      if (!target) return stopped
-      const topLeft = composerPoint(target)
-      const point = topLeft ? mouseEventPoint(topLeft, primaryHeight) : null
-      if (!topLeft || !point) return stopped
-      const procs = chatProcesses()
-      activateWeChat(procs)
-      const pump = pumpRunLoop
-      if (pump) pump(0.08)
-      const before = currentChatId()
-      const front = frontWindowAt(topLeft)
-      if (!front || !isChatWindow(front, target, before)) return stopped
-      if (!postClick(point)) return stopped
-      if (pump) pump(0.1)
-      const afterClick = currentChatId()
-      if (before > 0 && afterClick > 0 && before !== afterClick) {
-        return { clicked: true, pasted: false, sameWindow: false }
+    insertText(target: Frame | null, text: string, title: string): InsertAttempt {
+      if (!target) return { ok: false, reason: '没找到微信主窗口（微信可能已最小化或隐藏）' }
+      try {
+        const box = readBox(target)
+        if (!box.element) return insertByPaste(target, text, title)
+        if (box.value === null) return { ok: false, reason: '输入框文字不可读取' }
+        if (box.value.trim()) return { ok: false, reason: '输入框已有草稿，未覆盖' }
+        if (!setValue(box.element, text)) return { ok: false, reason: '写入微信输入框失败' }
+        activateUntilFront(chatProcesses())
+        focusBox(box.element)
+        return confirmInserted(box.element, target, text, title)
+      } finally {
+        releaseOwned()
       }
-      if (!postPaste()) return { clicked: true, pasted: false, sameWindow: true }
-      if (pump) pump(0.25)
-      const afterPaste = currentChatId()
-      const sameWindow = !(before > 0 && afterPaste > 0 && before !== afterPaste)
-      return { clicked: true, pasted: true, sameWindow }
     },
   }
 
-  function currentChatId() {
+  function mainWeChatPid(procs: Array<{ pid: number; path: string }>) {
+    return procs.find((item) => rankPath(item.path) === 0)?.pid ?? 0
+  }
+
+  function objcKit() {
+    const objc = koffi.load('/usr/lib/libobjc.A.dylib')
+    const getClass = objc.func('void *objc_getClass(const char *name)')
+    const sel = objc.func('void *sel_registerName(const char *name)')
+    return {
+      getClass,
+      sel,
+      msg0: objc.func('void *objc_msgSend(void *self, void *sel)'),
+      msgCount: objc.func('uint64 objc_msgSend(void *self, void *sel)'),
+      msgAt: objc.func('void *objc_msgSend(void *self, void *sel, uint64 index)'),
+      msgInt: objc.func('int objc_msgSend(void *self, void *sel)'),
+      msg1: objc.func('void *objc_msgSend(void *self, void *sel, void *arg)'),
+      msgData: objc.func('void *objc_msgSend(void *self, void *sel, void *bytes, uint64 length)'),
+      msgSet: objc.func('uint8 objc_msgSend(void *self, void *sel, void *data, void *type)'),
+      retain: objc.func('void *objc_retain(void *value)'),
+      release: objc.func('void objc_release(void *value)'),
+    }
+  }
+
+  let kit: ReturnType<typeof objcKit> | null | undefined
+  function appKit() {
+    if (kit !== undefined) return kit
     try {
-      const procs = wechatPids()
-      const onScreen = copyWindowList(ON_SCREEN)
-      const all = copyWindowList(ALL_WINDOWS)
-      const pids = new Set(procs.map((item) => item.pid))
-      const owners = new Set<string>(WECHAT_OWNER_NAMES)
-      for (const win of [...onScreen, ...all]) {
-        if (win.pid > 0 && owners.has(win.owner)) pids.add(win.pid)
-      }
-      const merged = mergeChatWindows(onScreen, all, [...pids])
-      const pool = merged.filter((win) => win.layer === 0 && (pids.has(win.pid) || owners.has(win.owner)))
-      const chosen = chooseChatWindow(pool)
-      return chosen && chosen.width >= 240 && chosen.height >= 240 ? chosen.id : 0
+      kit = objcKit()
+    } catch {
+      kit = null
+    }
+    return kit
+  }
+
+  function frontPid() {
+    const bridge = appKit()
+    if (!bridge) return 0
+    try {
+      const front = bridge.msg0(bridge.msg0(bridge.getClass('NSWorkspace'), bridge.sel('sharedWorkspace')), bridge.sel('frontmostApplication'))
+      if (!alive(front)) return 0
+      return Number(bridge.msgInt(front, bridge.sel('processIdentifier'))) || 0
     } catch {
       return 0
     }
   }
 
-  function frontWindowAt(point: { x: number; y: number }): ListedWindow | null {
+  function activateUntilFront(procs: Array<{ pid: number; path: string }>) {
+    const pid = mainWeChatPid(procs)
+    if (pid <= 0) return false
+    if (frontPid() === pid) return true
+    activateWeChat(procs.filter((item) => item.pid === pid))
+    const deadline = Date.now() + 600
+    while (Date.now() < deadline) {
+      pause(0.04)
+      if (frontPid() === pid) return true
+    }
+    return frontPid() === pid
+  }
+
+  function chatStill(beforeTitle: string, afterTitle: string) {
+    const before = usableTitle(beforeTitle)
+    const after = usableTitle(afterTitle)
+    return Boolean(before) && before === after
+  }
+
+  function readBox(target: Frame) {
+    let title = ''
+    for (const proc of chatProcesses()) {
+      const root = AXCreate(proc.pid)
+      if (!alive(root)) continue
+      keep(root)
+      expose(root, proc.pid)
+      const nodes = axWindows(root)
+      if (nodes.length === 0) continue
+      const chosen = pickChatElement(nodes, target, elementFrame, minimized)
+      if (!chosen) continue
+      const windowTitle = typeof read(chosen, 'AXTitle') === 'string' ? String(read(chosen, 'AXTitle')) : ''
+      const named = chatTitleFrom(windowTitle, chosen, read)
+      if (named) title = named
+      const element = findComposer(chosen)
+      if (!element) continue
+      const raw = read(element, 'AXValue')
+      return { element, value: typeof raw === 'string' ? raw : null, title: named || title }
+    }
+    return { element: null as unknown, value: null as string | null, title }
+  }
+
+  function setValue(element: unknown, text: string) {
+    const created = CFStringCreate(null, text, UTF8)
+    if (!alive(created)) return false
     try {
-      for (const win of copyWindowList(ON_SCREEN)) {
-        if (win.layer !== 0 || win.width < 20 || win.height < 20) continue
-        if (point.x < win.x || point.y < win.y || point.x >= win.x + win.width || point.y >= win.y + win.height) continue
-        return win
-      }
+      return Number(AXSet(element, key('AXValue'), created)) === 0
     } catch {
-      return null
+      return false
+    } finally {
+      CFRelease(created)
+    }
+  }
+
+  function focusBox(element: unknown) {
+    if (!alive(boolTrue)) return
+    try {
+      AXSet(element, key('AXFocused'), boolTrue)
+    } catch {
+      /* focus is a convenience */
+    }
+  }
+
+  function clearComposer(element: unknown) {
+    if (!setValue(element, '')) return false
+    const value = read(element, 'AXValue')
+    return typeof value === 'string' && !value.trim()
+  }
+
+  function confirmInserted(element: unknown, target: Frame, text: string, beforeTitle: string): InsertAttempt {
+    const landed = read(element, 'AXValue')
+    if (typeof landed !== 'string' || landed.trim() !== text) return { ok: false, reason: '写入后校验失败' }
+    if (!chatStill(beforeTitle, readBox(target).title)) {
+      if (clearComposer(element)) return { ok: false, reason: '当前微信会话已变化，已撤回插入，未发送' }
+      return { ok: false, reason: '当前微信会话已变化，未发送；输入框里仍有内容，请手动清空' }
+    }
+    return { ok: true, reason: '已插入' }
+  }
+
+  function composerMatching(target: Frame, text: string) {
+    const box = readBox(target)
+    if (!box.element || typeof box.value !== 'string' || box.value.trim() !== text) return null
+    return box.element
+  }
+
+  function awaitPastedComposer(target: Frame, text: string) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const box = composerMatching(target, text)
+      if (box) return box
+      if (attempt + 1 < 8) pause(0.06)
     }
     return null
   }
 
-  function isChatWindow(win: ListedWindow, target: Frame, chatId: number) {
-    const title = win.title.trim().toLowerCase()
-    if (title === '用 ai 处理' || title === '用ai处理' || title === '图片预览' || title === 'preview') return false
-    if (['表情', 'emoji', 'sticker', '贴纸', '颜文字'].some((marker) => title.includes(marker))) return false
-    const owners = new Set<string>(WECHAT_OWNER_NAMES)
-    if (!owners.has(win.owner) && !wechatPids().some((item) => item.pid === win.pid)) return false
-    if (chatId > 0 && win.id !== chatId) return false
-    return Math.abs(win.x - target.x) <= 8 && Math.abs(win.y - target.y) <= 8
+  function pastePlain(text: string) {
+    const bridge = appKit()
+    if (!bridge) return false
+    const memcpy = libc.func('void *memcpy(void *dst, void *src, size_t n)')
+    const board = bridge.msg0(bridge.getClass('NSPasteboard'), bridge.sel('generalPasteboard'))
+    if (!alive(board)) return false
+    let saved: Array<Array<{ kind: string; data: Buffer }>>
+    try {
+      saved = snapshotPasteboard(bridge, memcpy, board)
+    } catch {
+      return false
+    }
+    let pasted = false
+    try {
+      bridge.msgCount(board, bridge.sel('clearContents'))
+      if (!setPasteString(bridge, board, text)) return false
+      pasted = postPaste()
+      if (pasted) pause(0.35)
+      return pasted
+    } finally {
+      try {
+        restorePasteboard(bridge, board, saved)
+      } catch {
+        /* the clipboard is restored when the pasteboard bridge still answers */
+      }
+    }
+  }
+
+  function snapshotPasteboard(
+    bridge: NonNullable<ReturnType<typeof appKit>>,
+    memcpy: (dst: Buffer, src: unknown, n: number) => unknown,
+    board: unknown,
+  ) {
+    const items = bridge.msg0(board, bridge.sel('pasteboardItems'))
+    if (!alive(items)) return []
+    const count = Math.min(Number(bridge.msgCount(items, bridge.sel('count'))) || 0, 64)
+    const saved: Array<Array<{ kind: string; data: Buffer }>> = []
+    for (let index = 0; index < count; index += 1) {
+      const item = bridge.msgAt(items, bridge.sel('objectAtIndex:'), index)
+      if (!alive(item)) continue
+      const types = bridge.msg0(item, bridge.sel('types'))
+      const entry: Array<{ kind: string; data: Buffer }> = []
+      if (alive(types)) {
+        const typeCount = Math.min(Number(bridge.msgCount(types, bridge.sel('count'))) || 0, 32)
+        for (let typeIndex = 0; typeIndex < typeCount; typeIndex += 1) {
+          const kind = readString(bridge.msgAt(types, bridge.sel('objectAtIndex:'), typeIndex))
+          if (!kind) continue
+          const kindString = CFStringCreate(null, kind, UTF8)
+          try {
+            if (!alive(kindString)) continue
+            const data = bridge.msg1(item, bridge.sel('dataForType:'), kindString)
+            const copied = copyPasteData(bridge, memcpy, data)
+            if (copied) entry.push({ kind, data: copied })
+          } finally {
+            if (alive(kindString)) CFRelease(kindString)
+          }
+        }
+      }
+      if (entry.length > 0) saved.push(entry)
+    }
+    return saved
+  }
+
+  function copyPasteData(
+    bridge: NonNullable<ReturnType<typeof appKit>>,
+    memcpy: (dst: Buffer, src: unknown, n: number) => unknown,
+    data: unknown,
+  ) {
+    if (!alive(data)) return null
+    const length = Number(bridge.msgCount(data, bridge.sel('length')))
+    if (!Number.isFinite(length) || length < 0) return null
+    if (length === 0) return Buffer.alloc(0)
+    if (length > 8_000_000) throw new Error('pasteboard')
+    const bytes = bridge.msg0(data, bridge.sel('bytes'))
+    if (!alive(bytes)) return null
+    const buffer = Buffer.alloc(length)
+    memcpy(buffer, bytes, length)
+    return buffer
+  }
+
+  function setPasteString(bridge: NonNullable<ReturnType<typeof appKit>>, board: unknown, text: string) {
+    const created = CFStringCreate(null, text, UTF8)
+    if (!alive(created)) return false
+    try {
+      return Number(bridge.msgSet(board, bridge.sel('setString:forType:'), created, key('public.utf8-plain-text'))) === 1
+    } finally {
+      CFRelease(created)
+    }
+  }
+
+  function restorePasteboard(
+    bridge: NonNullable<ReturnType<typeof appKit>>,
+    board: unknown,
+    saved: Array<Array<{ kind: string; data: Buffer }>>,
+  ) {
+    bridge.msgCount(board, bridge.sel('clearContents'))
+    if (saved.length === 0) return
+    const array = bridge.msg0(bridge.getClass('NSMutableArray'), bridge.sel('array'))
+    if (!alive(array)) return
+    for (const entry of saved) {
+      const item = bridge.msg0(bridge.msg0(bridge.getClass('NSPasteboardItem'), bridge.sel('alloc')), bridge.sel('init'))
+      if (!alive(item)) continue
+      for (const part of entry) {
+        const bytes = part.data.length > 0 ? part.data : Buffer.alloc(1)
+        const data = bridge.msgData(bridge.getClass('NSData'), bridge.sel('dataWithBytes:length:'), bytes, part.data.length)
+        const kind = CFStringCreate(null, part.kind, UTF8)
+        let held: unknown = null
+        try {
+          if (alive(data) && alive(kind)) {
+            held = bridge.retain(data)
+            bridge.msgSet(item, bridge.sel('setData:forType:'), held, kind)
+          }
+        } finally {
+          if (alive(kind)) CFRelease(kind)
+          if (alive(held)) bridge.release(held)
+        }
+      }
+      bridge.msg1(array, bridge.sel('addObject:'), item)
+      bridge.release(item)
+    }
+    bridge.msg1(board, bridge.sel('writeObjects:'), array)
+  }
+
+  function pasteInsert(target: Frame, text: string, beforeTitle: string): InsertAttempt {
+    const procs = chatProcesses()
+    if (!activateUntilFront(procs)) return { ok: false, reason: '微信未能切到前台，未插入' }
+    if (!postClick(composerPoint(target))) return { ok: false, reason: '写入微信输入框失败' }
+    pause(0.15)
+    if (frontPid() !== mainWeChatPid(procs)) return { ok: false, reason: '点击输入区后焦点变化，未插入' }
+    const afterClick = readBox(target)
+    if (!chatStill(beforeTitle, afterClick.title)) return { ok: false, reason: '点击后无法再次确认当前会话，未插入；请用复制' }
+    if (typeof afterClick.value === 'string') {
+      if (afterClick.value.trim()) return { ok: false, reason: '输入框已有草稿，未覆盖' }
+      if (setValue(afterClick.element, text)) {
+        const landed = read(afterClick.element, 'AXValue')
+        if (typeof landed === 'string' && landed.trim() === text) return { ok: true, reason: '已插入' }
+      }
+    }
+    if (!pastePlain(text)) return { ok: false, reason: '写入微信输入框失败' }
+    return { ok: true, reason: '已粘贴到输入框，请核对后发送' }
+  }
+
+  function insertByPaste(target: Frame, text: string, beforeTitle: string): InsertAttempt {
+    const pasted = pasteInsert(target, text, beforeTitle)
+    if (!pasted.ok) return pasted
+    const box = awaitPastedComposer(target, text)
+    if (!box) return { ok: true, reason: '已粘贴到输入框，请核对后自己发送' }
+    focusBox(box)
+    return confirmInserted(box, target, text, beforeTitle)
   }
 
   function findComposer(window: unknown) {
-    const windowFrame = elementFrame(window)
     const found: Array<{ element: unknown; shape: TextAreaShape }> = []
     const queue = [window]
     let seen = 0
-    while (queue.length > 0 && seen < 4000) {
+    while (queue.length > 0 && seen < MAX_INPUT_NODES) {
       const element = queue.shift()
       if (!alive(element) && element !== window) continue
       seen += 1
@@ -932,13 +1182,7 @@ function bindNative(): Native {
         const frame = elementFrame(element)
         found.push({
           element,
-          shape: {
-            role,
-            width: frame?.width ?? 0,
-            height: frame?.height ?? 0,
-            x: frame?.x,
-            y: frame?.y,
-          },
+          shape: { role, width: frame?.width ?? 0, height: frame?.height ?? 0 },
         })
       }
       const children = read(element, 'AXChildren')
@@ -946,7 +1190,7 @@ function bindNative(): Native {
         for (const child of children) queue.push(child)
       }
     }
-    return pickLargestTextArea(found, (entry) => entry.shape, windowFrame)?.element ?? null
+    return pickLargestTextArea(found, (entry) => entry.shape)?.element ?? null
   }
 
   function assignText(element: unknown, text: string) {
