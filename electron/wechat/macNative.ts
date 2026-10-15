@@ -1,11 +1,5 @@
 import { createRequire } from 'node:module'
-import {
-  COMPOSER_IDENTIFIER,
-  isComposerIdentifier,
-  pickComposer,
-  shouldExpandForComposer,
-  type ComposerShape,
-} from '../../src/dock/axComposer.ts'
+import { composerPoint, mouseEventPoint, pickLargestTextArea, type TextAreaShape } from '../../src/dock/axComposer.ts'
 import { chatTitleFrom, pickChatElement, type AxRead, type Frame } from '../../src/dock/axTitle.ts'
 import { realChatTitle } from '../../src/dock/sessionReport.ts'
 import { usableTitle } from '../../src/domain/wechat/matchChat.ts'
@@ -46,6 +40,13 @@ interface Native {
   screenGranted(): boolean
   captureTitle(windowId: number, crop: Frame, file: string): boolean
   chatWindowId(): number
+  pasteComposer(target: Frame | null, primaryHeight: number): PasteAttempt
+}
+
+export interface PasteAttempt {
+  clicked: boolean
+  pasted: boolean
+  sameWindow: boolean
 }
 
 /**
@@ -82,6 +83,22 @@ export function readAxComposer(target: Frame | null, hostTrusted: boolean): AxCo
   if (!api) return null
   try {
     return api.composer(target, null)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Paste fallback from `wechat_send.insert_text`.
+ * Clicks the composer band, then Cmd+V. Does not press Return.
+ * Null means the event calls could not be made.
+ */
+export function pasteComposer(target: Frame | null, primaryHeight: number, hostTrusted: boolean): PasteAttempt | null {
+  if (!hostTrusted) return null
+  const api = lib()
+  if (!api) return null
+  try {
+    return api.pasteComposer(target, primaryHeight)
   } catch {
     return null
   }
@@ -611,6 +628,62 @@ function bindNative(): Native {
     pumpRunLoop = null
   }
 
+  // Cmd+V only. Key code 36 is Return and is never posted on this path.
+  const KEY_V = 9
+  const COMMAND_FLAG = 0x100000
+  let postClick: (point: { x: number; y: number }) => boolean = () => false
+  let postPaste: () => boolean = () => false
+  try {
+    koffi.struct('ZhidaPoint', { x: 'double', y: 'double' })
+    const createMouse = cg.func('void *CGEventCreateMouseEvent(void *source, uint32 type, ZhidaPoint point, uint32 button)')
+    const createKey = cg.func('void *CGEventCreateKeyboardEvent(void *source, uint16 key, uint8 down)')
+    const setFlags = cg.func('void CGEventSetFlags(void *event, uint64 flags)')
+    const postEvent = cg.func('void CGEventPost(uint32 tap, void *event)')
+    postClick = (point) => {
+      let moved: unknown = null
+      let down: unknown = null
+      let up: unknown = null
+      try {
+        moved = createMouse(null, 5, point, 0)
+        down = createMouse(null, 1, point, 0)
+        up = createMouse(null, 2, point, 0)
+        if (!alive(down) || !alive(up)) return false
+        if (alive(moved)) postEvent(0, moved)
+        postEvent(0, down)
+        postEvent(0, up)
+        return true
+      } catch {
+        return false
+      } finally {
+        if (alive(moved)) CFRelease(moved)
+        if (alive(down)) CFRelease(down)
+        if (alive(up)) CFRelease(up)
+      }
+    }
+    postPaste = () => {
+      let down: unknown = null
+      let up: unknown = null
+      try {
+        down = createKey(null, KEY_V, 1)
+        up = createKey(null, KEY_V, 0)
+        if (!alive(down) || !alive(up)) return false
+        setFlags(down, COMMAND_FLAG)
+        setFlags(up, COMMAND_FLAG)
+        postEvent(0, down)
+        postEvent(0, up)
+        return true
+      } catch {
+        return false
+      } finally {
+        if (alive(down)) CFRelease(down)
+        if (alive(up)) CFRelease(up)
+      }
+    }
+  } catch {
+    postClick = () => false
+    postPaste = () => false
+  }
+
   // WeChat builds the accessibility tree after AXManualAccessibility, on its
   // own run loop. Reading in the same turn only sees the menu bar.
   function expose(root: unknown, pid: number) {
@@ -776,31 +849,91 @@ function bindNative(): Native {
         return 0
       }
     },
+    pasteComposer(target: Frame | null, primaryHeight: number): PasteAttempt {
+      const stopped: PasteAttempt = { clicked: false, pasted: false, sameWindow: true }
+      if (!target) return stopped
+      const topLeft = composerPoint(target)
+      const point = topLeft ? mouseEventPoint(topLeft, primaryHeight) : null
+      if (!topLeft || !point) return stopped
+      const procs = chatProcesses()
+      activateWeChat(procs)
+      const pump = pumpRunLoop
+      if (pump) pump(0.08)
+      const before = currentChatId()
+      const front = frontWindowAt(topLeft)
+      if (!front || !isChatWindow(front, target, before)) return stopped
+      if (!postClick(point)) return stopped
+      if (pump) pump(0.1)
+      const afterClick = currentChatId()
+      if (before > 0 && afterClick > 0 && before !== afterClick) {
+        return { clicked: true, pasted: false, sameWindow: false }
+      }
+      if (!postPaste()) return { clicked: true, pasted: false, sameWindow: true }
+      if (pump) pump(0.25)
+      const afterPaste = currentChatId()
+      const sameWindow = !(before > 0 && afterPaste > 0 && before !== afterPaste)
+      return { clicked: true, pasted: true, sameWindow }
+    },
+  }
+
+  function currentChatId() {
+    try {
+      const procs = wechatPids()
+      const onScreen = copyWindowList(ON_SCREEN)
+      const all = copyWindowList(ALL_WINDOWS)
+      const pids = new Set(procs.map((item) => item.pid))
+      const owners = new Set<string>(WECHAT_OWNER_NAMES)
+      for (const win of [...onScreen, ...all]) {
+        if (win.pid > 0 && owners.has(win.owner)) pids.add(win.pid)
+      }
+      const merged = mergeChatWindows(onScreen, all, [...pids])
+      const pool = merged.filter((win) => win.layer === 0 && (pids.has(win.pid) || owners.has(win.owner)))
+      const chosen = chooseChatWindow(pool)
+      return chosen && chosen.width >= 240 && chosen.height >= 240 ? chosen.id : 0
+    } catch {
+      return 0
+    }
+  }
+
+  function frontWindowAt(point: { x: number; y: number }): ListedWindow | null {
+    try {
+      for (const win of copyWindowList(ON_SCREEN)) {
+        if (win.layer !== 0 || win.width < 20 || win.height < 20) continue
+        if (point.x < win.x || point.y < win.y || point.x >= win.x + win.width || point.y >= win.y + win.height) continue
+        return win
+      }
+    } catch {
+      return null
+    }
+    return null
+  }
+
+  function isChatWindow(win: ListedWindow, target: Frame, chatId: number) {
+    const title = win.title.trim().toLowerCase()
+    if (title === '用 ai 处理' || title === '用ai处理' || title === '图片预览' || title === 'preview') return false
+    if (['表情', 'emoji', 'sticker', '贴纸', '颜文字'].some((marker) => title.includes(marker))) return false
+    const owners = new Set<string>(WECHAT_OWNER_NAMES)
+    if (!owners.has(win.owner) && !wechatPids().some((item) => item.pid === win.pid)) return false
+    if (chatId > 0 && win.id !== chatId) return false
+    return Math.abs(win.x - target.x) <= 8 && Math.abs(win.y - target.y) <= 8
   }
 
   function findComposer(window: unknown) {
     const windowFrame = elementFrame(window)
-    const found: Array<{ element: unknown; shape: ComposerShape }> = []
-    const queue: Array<{ element: unknown; mark: string }> = [{ element: window, mark: '' }]
+    const found: Array<{ element: unknown; shape: TextAreaShape }> = []
+    const queue = [window]
     let seen = 0
-    while (queue.length > 0 && seen < 2500) {
-      const item = queue.shift()
-      if (!item) break
-      const element = item.element
+    while (queue.length > 0 && seen < 4000) {
+      const element = queue.shift()
       if (!alive(element) && element !== window) continue
       seen += 1
       const role = typeof read(element, 'AXRole') === 'string' ? String(read(element, 'AXRole')) : ''
-      const ownId = typeof read(element, 'AXIdentifier') === 'string' ? String(read(element, 'AXIdentifier')) : ''
-      const identifier = isComposerIdentifier(ownId) ? ownId : item.mark || ownId
-      const title = typeof read(element, 'AXTitle') === 'string' ? String(read(element, 'AXTitle')) : ''
-      if (role === 'AXTextArea' || role === 'AXTextField') {
+      if (role === 'AXTextArea') {
         const frame = elementFrame(element)
         found.push({
           element,
           shape: {
             role,
-            identifier,
-            title,
             width: frame?.width ?? 0,
             height: frame?.height ?? 0,
             x: frame?.x,
@@ -809,12 +942,11 @@ function bindNative(): Native {
         })
       }
       const children = read(element, 'AXChildren')
-      const list = Array.isArray(children) ? children : []
-      if (!shouldExpandForComposer(role, ownId, list.length)) continue
-      const mark = isComposerIdentifier(ownId) || item.mark === COMPOSER_IDENTIFIER ? COMPOSER_IDENTIFIER : ''
-      for (const child of list) queue.push({ element: child, mark })
+      if (Array.isArray(children)) {
+        for (const child of children) queue.push(child)
+      }
     }
-    return pickComposer(found, (entry) => entry.shape, windowFrame)?.element ?? null
+    return pickLargestTextArea(found, (entry) => entry.shape, windowFrame)?.element ?? null
   }
 
   function assignText(element: unknown, text: string) {

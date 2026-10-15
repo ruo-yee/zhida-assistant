@@ -1,113 +1,102 @@
-/** WeChat's chat composer. Exact identifier when the tree exposes one. */
-export const COMPOSER_IDENTIFIER = 'chat_input_field'
+/**
+ * Ports of the working Mac companion:
+ * `title_ocr.fallback_pane_left` and `wechat_send._composer_point` /
+ * the largest `AXTextArea` inside the chat window.
+ * Insert never presses Return.
+ */
 
-export interface ComposerShape {
-  role: string
-  identifier: string
-  title: string
-  width: number
-  height: number
-  /** Top-left screen position. Absent when Accessibility did not expose AXPosition. */
-  x?: number
-  y?: number
+/** WeChat 4, left to right: icon rail, then the chat list. */
+export const ICON_RAIL_POINTS = 68
+export const DEFAULT_CHAT_LIST_POINTS = 280
+
+/**
+ * Points from the window's left edge to the conversation pane.
+ * Same rule as `title_ocr.fallback_pane_left`.
+ */
+export function fallbackPaneLeft(windowWidth: number) {
+  const edge = ICON_RAIL_POINTS + DEFAULT_CHAT_LIST_POINTS
+  return Math.min(edge, Math.max(windowWidth - 180, 0))
 }
 
-export interface ComposerWindow {
+/** Empty composer row, measured up from the window bottom. Not a fraction of the height. */
+export const COMPOSER_BOTTOM_INSET = 40
+/** Stay left of the send control. */
+export const SEND_RESERVE_POINTS = 88
+
+export interface ComposerFrame {
   x: number
   y: number
   width: number
   height: number
 }
 
-const HISTORY_ROLES = new Set(['AXOutline', 'AXTable', 'AXList', 'AXImage', 'AXWebArea', 'AXButton'])
-
-/** Exact id, or a path that ends at the chat input. */
-export function isComposerIdentifier(identifier: string) {
-  const text = identifier.trim()
-  return text === COMPOSER_IDENTIFIER || text.endsWith(`.${COMPOSER_IDENTIFIER}`)
+/**
+ * Click target for the paste fallback. Top-left global points.
+ * Port of `wechat_send._composer_point`: the conversation pane's bottom
+ * band, left of Send. A fraction of the whole window (62% across, 16% up)
+ * lands in the message list on a tall window and opens videos.
+ */
+export function composerPoint(frame: ComposerFrame): { x: number; y: number } | null {
+  if (frame.width < 240 || frame.height < 240) return null
+  const paneLeft = fallbackPaneLeft(frame.width)
+  const paneRight = frame.width - SEND_RESERVE_POINTS
+  if (paneRight - paneLeft < 80) return null
+  const x = frame.x + (paneLeft + paneRight) / 2
+  const y = frame.y + frame.height - COMPOSER_BOTTOM_INSET
+  const fromBottom = frame.y + frame.height - y
+  if (fromBottom < 24 || fromBottom > 64) return null
+  if (x < frame.x + paneLeft || x > frame.x + paneRight) return null
+  return { x, y }
 }
 
 /**
- * Message history, the session list, and media are not the composer.
- * A large scroll area is the message list; the input's own scroll area is small.
- * The composer identifier is always walked, including when it sits on a group.
+ * CGEvent mouse positions use the bottom-left of the primary display.
+ * `topLeft` is the Quartz / Electron point (Y grows downward).
  */
-export function shouldExpandForComposer(role: string, identifier: string, childCount: number) {
-  if (isComposerIdentifier(identifier)) return true
-  if (HISTORY_ROLES.has(role)) return false
-  if (role === 'AXScrollArea' && childCount > 12) return false
-  return true
+export function mouseEventPoint(topLeft: { x: number; y: number }, primaryHeight: number): { x: number; y: number } | null {
+  if (!(primaryHeight > 0) || !(topLeft.x > 0)) return null
+  const y = primaryHeight - topLeft.y
+  if (!(y > 0)) return null
+  return { x: topLeft.x, y }
+}
+
+export interface TextAreaShape {
+  role: string
+  width: number
+  height: number
+  x?: number
+  y?: number
 }
 
 /**
- * The writable chat box. Prefer the known identifier, then a wide text box
- * in the bottom band of the window, then the largest text area.
- * A search field is not the composer. Text that sits in the message list
- * is not the composer either — writing there must not be how insert lands.
- * One text area with no measured size is still the box — WeChat often hides
- * AXSize until the tree is warm.
+ * Largest `AXTextArea` inside the chat window from the window server.
+ * Port of the accessibility insert pick. A search field is not a text area.
+ * Text outside that window is not the composer.
  */
-export function pickComposer<T>(
+export function pickLargestTextArea<T>(
   items: T[],
-  shapeOf: (item: T) => ComposerShape,
-  window?: ComposerWindow | null,
+  shapeOf: (item: T) => TextAreaShape,
+  window: ComposerFrame | null,
 ): T | null {
-  const text = items.filter((item) => {
-    const role = shapeOf(item).role
-    return role === 'AXTextArea' || role === 'AXTextField'
-  })
-  const named = text.find((item) => isComposerIdentifier(shapeOf(item).identifier))
-  if (named) return named
-  if (window && window.width >= 240 && window.height >= 240) {
-    const band = text.filter((item) => inComposerBand(shapeOf(item), window))
-    if (band.length > 0) return largest(band, shapeOf)
-    const positioned = text.filter((item) => shapeOf(item).y != null)
-    if (positioned.length > 0 && positioned.every((item) => inMessageRegion(shapeOf(item), window))) {
-      return pickBySize(text.filter((item) => shapeOf(item).y == null), shapeOf)
-    }
-  }
-  return pickBySize(text, shapeOf)
-}
-
-function pickBySize<T>(text: T[], shapeOf: (item: T) => ComposerShape): T | null {
-  const areas = text.filter((item) => {
-    const shape = shapeOf(item)
-    return shape.role === 'AXTextArea' && shape.width >= 80 && shape.height >= 16
-  })
-  if (areas.length > 0) return largest(areas, shapeOf)
-  const bare = text.filter((item) => shapeOf(item).role === 'AXTextArea')
+  const areas = items.filter((item) => shapeOf(item).role === 'AXTextArea')
+  const inside = window ? areas.filter((item) => areaInside(shapeOf(item), window)) : areas.filter((item) => shapeOf(item).width >= 80 && shapeOf(item).height >= 16)
+  if (inside.length > 0) return largest(inside, shapeOf)
+  const bare = areas.filter((item) => shapeOf(item).x == null && shapeOf(item).y == null)
   if (bare.length === 1) return bare[0] ?? null
-  const fields = text.filter((item) => {
-    const shape = shapeOf(item)
-    if (shape.role !== 'AXTextField' || shape.width < 160) return false
-    if (shape.identifier === 'search_field' || shape.title.includes('搜索')) return false
-    return true
-  })
-  if (fields.length === 0) return null
-  return largest(fields, shapeOf)
+  return null
 }
 
-function largest<T>(items: T[], shapeOf: (item: T) => ComposerShape) {
+function areaInside(shape: TextAreaShape, window: ComposerFrame) {
+  if (shape.x == null || shape.y == null || shape.width < 80 || shape.height < 16) return false
+  const centerX = shape.x + shape.width / 2
+  const centerY = shape.y + shape.height / 2
+  return centerX >= window.x && centerX <= window.x + window.width && centerY >= window.y && centerY <= window.y + window.height
+}
+
+function largest<T>(items: T[], shapeOf: (item: T) => TextAreaShape) {
   return [...items].sort((a, b) => area(shapeOf(b)) - area(shapeOf(a)))[0] ?? null
 }
 
-function area(shape: ComposerShape) {
+function area(shape: TextAreaShape) {
   return shape.width * shape.height
-}
-
-/** Wide box whose bottom edge sits in the composer strip, not on a bubble. */
-function inComposerBand(shape: ComposerShape, window: ComposerWindow) {
-  if (shape.y == null || shape.width < 80 || shape.height < 16 || shape.height > 280) return false
-  if (shape.identifier === 'search_field' || shape.title.includes('搜索')) return false
-  if (shape.role === 'AXTextField' && shape.width < 160) return false
-  if (shape.width < window.width * 0.32) return false
-  const center = shape.y + shape.height / 2
-  const bottomGap = window.y + window.height - (shape.y + shape.height)
-  return center >= window.y + window.height * 0.75 && bottomGap <= window.height * 0.16 && bottomGap >= -8
-}
-
-function inMessageRegion(shape: ComposerShape, window: ComposerWindow) {
-  if (shape.y == null) return false
-  const center = shape.y + shape.height / 2
-  return center < window.y + window.height * 0.72
 }
